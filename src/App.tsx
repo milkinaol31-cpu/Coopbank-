@@ -1,0 +1,1352 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  District,
+  User,
+  DisciplinaryReport,
+  AuditLogEntry,
+  SystemConfig
+} from './types';
+import {
+  INITIAL_DISTRICTS,
+  INITIAL_USERS,
+  INITIAL_REPORTS,
+  INITIAL_AUDIT_LOGS,
+  INITIAL_CONFIG
+} from './data/mockData';
+import {
+  loadStoredReports,
+  saveStoredReports,
+  loadStoredUsers,
+  saveStoredUsers,
+  loadStoredDistricts,
+  saveStoredDistricts,
+  loadStoredAuditLogs,
+  saveStoredAuditLogs,
+  getOfflineQueue,
+  enqueueOfflineReport,
+  clearOfflineQueue,
+  OfflineQueueItem,
+  loadStoredAuthSession,
+  saveStoredAuthSession
+} from './utils/offlineStorage';
+import { useFirebase } from './context/FirebaseContext';
+import {
+  saveReportToFirestore,
+  addReportReviewToFirestore,
+  saveUserToFirestore,
+  saveDistrictToFirestore,
+  subscribeReports,
+  subscribeDistricts,
+  subscribeUsers,
+  subscribeAuditLogs,
+} from './services/firebaseDb';
+import { Header } from './components/Header';
+import { Navigation, NavTab } from './components/Navigation';
+import { DistrictDashboard } from './components/DistrictDashboard';
+import { ManagerDashboard } from './components/ManagerDashboard';
+import { ReportForm } from './components/ReportForm';
+import { ReportList } from './components/ReportList';
+import { ReportDetailModal } from './components/ReportDetailModal';
+import { OfficialPrintDocument } from './components/OfficialPrintDocument';
+import { AdminDashboard } from './components/AdminDashboard';
+import { AuditLogView } from './components/AuditLogView';
+import { OfflineSyncCenter } from './components/OfflineSyncCenter';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { AppDeploymentModal } from './components/AppDeploymentModal';
+import { AccessDeniedScreen } from './components/AccessDeniedScreen';
+import { LoginScreen } from './components/LoginScreen';
+import { ChangePasswordModal } from './components/ChangePasswordModal';
+import { exportReportsToCSV } from './utils/exportUtils';
+import { useOnlineStatus } from './hooks/useOnlineStatus';
+import { AlertCircle, Lock, Shield, Database, CheckCircle, AlertTriangle, X, RefreshCw, LogIn } from 'lucide-react';
+
+export default function App() {
+  const [systemConfig] = useState<SystemConfig>(INITIAL_CONFIG);
+
+  // Firebase Context
+  const { firebaseUser, authLoading, isConnected, isSeeding, signInWithGoogle, sendPasswordReset, signOut, refreshConnection, dbError } = useFirebase();
+  const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [isDbLoading, setIsDbLoading] = useState(false);
+
+  // Persistent State backed by Firestore + local offline caching
+  const [districts, setDistricts] = useState<District[]>(() => loadStoredDistricts());
+  const [users, setUsers] = useState<User[]>(() => loadStoredUsers());
+  const [reports, setReports] = useState<DisciplinaryReport[]>(() => loadStoredReports());
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(() => loadStoredAuditLogs());
+  const [offlineQueue, setOfflineQueue] = useState<OfflineQueueItem[]>(() => getOfflineQueue());
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Online connection tracking hook
+  const { isOnline } = useOnlineStatus();
+
+  // Current logged in user (null by default if no active session in localStorage)
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    return loadStoredAuthSession();
+  });
+
+  // Track if current session holds admin authorization so switching personas never locks the admin out
+  const [sessionAdminUser, setSessionAdminUser] = useState<User | null>(() => {
+    const current = loadStoredAuthSession();
+    return current?.Role === 'ADMIN' ? current : null;
+  });
+
+  // Active Navigation Tab
+  const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
+
+  // Modal / Detail states
+  const [detailModalReport, setDetailModalReport] = useState<DisciplinaryReport | null>(null);
+  const [printDocumentReport, setPrintDocumentReport] = useState<DisciplinaryReport | null>(null);
+  const [editingReport, setEditingReport] = useState<DisciplinaryReport | null>(null);
+  const [isGuideOpen, setIsGuideOpen] = useState<boolean>(false);
+
+  // Optional filter drilldown
+  const [forcedDistrictFilter, setForcedDistrictFilter] = useState<string | undefined>(undefined);
+
+  // Auto-dismiss notification after 6 seconds
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
+
+  // Connect Firestore Real-Time Snapshot Listeners
+  useEffect(() => {
+    if (!isConnected && !firebaseUser) return;
+
+    setIsDbLoading(true);
+
+    const unsubReports = subscribeReports(
+      (fsReports) => {
+        if (fsReports.length > 0) {
+          setReports(fsReports);
+          saveStoredReports(fsReports);
+        }
+        setIsDbLoading(false);
+      },
+      (err) => console.error('Subscription error for reports:', err)
+    );
+
+    const unsubDistricts = subscribeDistricts(
+      (fsDistricts) => {
+        if (fsDistricts.length > 0) {
+          setDistricts(fsDistricts);
+          saveStoredDistricts(fsDistricts);
+        }
+      },
+      (err) => console.error('Subscription error for districts:', err)
+    );
+
+    const unsubUsers = subscribeUsers(
+      (fsUsers) => {
+        if (fsUsers.length > 0) {
+          // Merge remote users from Firestore with any local users to ensure no newly created user is wiped
+          setUsers((prevUsers) => {
+            const userMap = new Map<string, User>();
+            // Remote Firestore users take priority
+            fsUsers.forEach((u) => userMap.set(u.Email.toLowerCase(), u));
+            // Keep local users that have not yet synced or are cached
+            prevUsers.forEach((u) => {
+              if (!userMap.has(u.Email.toLowerCase())) {
+                userMap.set(u.Email.toLowerCase(), u);
+                // Also trigger background persistence to Firestore
+                saveUserToFirestore(u, 'system@cbo.com', 'System Sync').catch(() => {});
+              }
+            });
+            const merged = Array.from(userMap.values());
+            saveStoredUsers(merged);
+            return merged;
+          });
+
+          // Match authenticated Google account with bank user directory
+          if (firebaseUser?.email) {
+            const userEmail = firebaseUser.email.toLowerCase();
+            const allLocalUsers = loadStoredUsers();
+            let matched = fsUsers.find((u) => u.Email.toLowerCase() === userEmail) ||
+                          allLocalUsers.find((u) => u.Email.toLowerCase() === userEmail);
+
+            const isLiveAdminAccount =
+              userEmail === 'milkinaol31@gmail.com' ||
+              userEmail === 'bighabes@gmail.com' ||
+              userEmail.includes('admin') ||
+              matched?.Role === 'ADMIN';
+
+            if (isLiveAdminAccount) {
+              if (!matched) {
+                const adminUser: User = {
+                  UserID: `USR-${firebaseUser.uid.slice(0, 8)}`,
+                  Email: firebaseUser.email,
+                  FullName: firebaseUser.displayName || 'Lead HR Enterprise Administrator',
+                  Role: 'ADMIN',
+                  DistrictID: null,
+                  Position: 'Lead HR Enterprise Administrator',
+                  IsActive: true,
+                  Password: '',
+                  MustChangePassword: false,
+                  CreatedAt: new Date().toISOString(),
+                  LastLogin: new Date().toISOString(),
+                };
+                saveUserToFirestore(adminUser, firebaseUser.email, adminUser.FullName);
+                matched = adminUser;
+              } else {
+                matched = {
+                  ...matched,
+                  Role: 'ADMIN',
+                  IsActive: true,
+                };
+              }
+            }
+
+            if (matched) {
+              setCurrentUser(matched);
+              saveStoredAuthSession(matched);
+              if (matched.Role === 'ADMIN') {
+                setSessionAdminUser(matched);
+              }
+            }
+          } else if (currentUser) {
+            // Keep currentUser in sync with live status in fsUsers (e.g. if deactivation happens)
+            const matched = fsUsers.find((u) => u.UserID === currentUser.UserID || u.Email.toLowerCase() === currentUser.Email.toLowerCase());
+            if (matched) {
+              setCurrentUser(matched);
+              saveStoredAuthSession(matched);
+              if (matched.Role === 'ADMIN') {
+                setSessionAdminUser(matched);
+              }
+            }
+          }
+        }
+        setIsDbLoading(false);
+      },
+      (err) => console.error('Subscription error for users:', err)
+    );
+
+    const unsubAudit = subscribeAuditLogs(
+      (fsLogs) => {
+        if (fsLogs.length > 0) {
+          setAuditLogs(fsLogs);
+          saveStoredAuditLogs(fsLogs);
+        }
+      },
+      (err) => console.error('Subscription error for audit logs:', err)
+    );
+
+    return () => {
+      unsubReports();
+      unsubDistricts();
+      unsubUsers();
+      unsubAudit();
+    };
+  }, [isConnected, firebaseUser]);
+
+  // Local sync handlers
+  const persistReports = (newReports: DisciplinaryReport[]) => {
+    setReports(newReports);
+    saveStoredReports(newReports);
+  };
+
+  const persistAuditLogs = (newLogs: AuditLogEntry[]) => {
+    setAuditLogs(newLogs);
+    saveStoredAuditLogs(newLogs);
+  };
+
+  const persistUsers = (newUsers: User[]) => {
+    setUsers(newUsers);
+    saveStoredUsers(newUsers);
+  };
+
+  const persistDistricts = (newDistricts: District[]) => {
+    setDistricts(newDistricts);
+    saveStoredDistricts(newDistricts);
+  };
+
+  // Synchronize queued offline reports
+  const handleSyncAll = useCallback(async () => {
+    if (offlineQueue.length === 0) return;
+    setIsSyncing(true);
+
+    try {
+      if (isOnline && firebaseUser) {
+        for (const item of offlineQueue) {
+          const reportToSync = reports.find((r) => r.ReportID === item.reportId);
+          if (reportToSync) {
+            await saveReportToFirestore(
+              reportToSync,
+              currentUser?.Email || 'system@cbo.com',
+              currentUser?.FullName || 'System Synchronizer',
+              item.action === 'CREATE'
+            );
+          }
+        }
+      }
+
+      // Mark all reports as synced in local state
+      const updatedReports = reports.map((r) => {
+        if (r.pendingOfflineSync) {
+          return {
+            ...r,
+            pendingOfflineSync: false,
+          };
+        }
+        return r;
+      });
+
+      persistReports(updatedReports);
+
+      // Log sync event in audit trail
+      const now = new Date().toISOString();
+      const syncAudit: AuditLogEntry = {
+        AuditID: `AUD-SYNC-${Date.now().toString().slice(-4)}`,
+        UserEmail: currentUser?.Email || 'system@cbo.com',
+        UserName: currentUser?.FullName || 'System Synchronizer',
+        Action: 'OFFLINE_SYNC_COMPLETED',
+        EntityType: 'System',
+        EntityID: `QUEUE-${offlineQueue.length}`,
+        Timestamp: now,
+        ChangeSummary: `Successfully synchronized ${offlineQueue.length} offline disciplinary report filings with Cloud Firestore master database.`,
+        ReasonForChange: 'Offline queue synchronization protocol completed.',
+      };
+
+      persistAuditLogs([syncAudit, ...auditLogs]);
+      clearOfflineQueue();
+      setOfflineQueue([]);
+      setNotification({
+        type: 'success',
+        message: `Successfully synchronized ${offlineQueue.length} report(s) with Cloud Firestore.`,
+      });
+    } catch (err: any) {
+      console.error('Batch sync error:', err);
+      setNotification({
+        type: 'error',
+        message: `Failed to complete cloud synchronization: ${err?.message || 'Network error'}.`,
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [offlineQueue, reports, auditLogs, currentUser, isOnline, firebaseUser]);
+
+  // Automatically trigger sync when transitioning from offline to online
+  useEffect(() => {
+    if (isOnline && offlineQueue.length > 0 && firebaseUser) {
+      handleSyncAll();
+    }
+  }, [isOnline, offlineQueue.length, firebaseUser, handleSyncAll]);
+
+  // User login handler (called when user submits email & password on LoginScreen)
+  const handleLoginSuccess = (user: User, requiresPasswordChange?: boolean) => {
+    const userToSave: User = {
+      ...user,
+      MustChangePassword: requiresPasswordChange !== undefined ? requiresPasswordChange : user.MustChangePassword,
+    };
+    setCurrentUser(userToSave);
+    if (user.Role === 'ADMIN') {
+      setSessionAdminUser(userToSave);
+    }
+    saveStoredAuthSession(userToSave);
+    setActiveTab('dashboard');
+    setForcedDistrictFilter(undefined);
+
+    const now = new Date().toISOString();
+    const loginAudit: AuditLogEntry = {
+      AuditID: `AUD-LOGIN-${Date.now().toString().slice(-4)}`,
+      UserEmail: user.Email,
+      UserName: user.FullName,
+      Action: 'USER_LOGIN',
+      EntityType: 'User',
+      EntityID: user.UserID,
+      Timestamp: now,
+      ChangeSummary: `User ${user.FullName} (${user.Email}) signed in to Bank Disciplinary Portal with credentials.`,
+      ReasonForChange: 'Authenticated session initialized.',
+    };
+    persistAuditLogs([loginAudit, ...auditLogs]);
+
+    const distName = districts.find(d => d.DistrictID === user.DistrictID)?.DistrictName;
+    setNotification({
+      type: 'success',
+      message: `Welcome, ${user.FullName}. Authenticated for ${user.Role === 'DISTRICT_HR' ? (distName || 'District HR') : user.Role === 'ADMIN' ? 'Enterprise Administration' : 'Head Office HR Oversight'}.`,
+    });
+  };
+
+  // Handler for mandatory password update when logging in with admin-generated default credentials
+  const handlePasswordChanged = async (newPassword: string) => {
+    if (!currentUser) return;
+    const now = new Date().toISOString();
+    const updatedUser: User = {
+      ...currentUser,
+      Password: newPassword,
+      TemporaryPassword: '',
+      MustChangePassword: false,
+      LastPasswordReset: now,
+    };
+
+    setCurrentUser(updatedUser);
+    saveStoredAuthSession(updatedUser);
+
+    const updatedUsers = users.map((u) => (u.UserID === updatedUser.UserID ? updatedUser : u));
+    persistUsers(updatedUsers);
+
+    if (isConnected || isOnline) {
+      try {
+        await saveUserToFirestore(updatedUser, updatedUser.Email, updatedUser.FullName);
+      } catch (e) {
+        console.warn('Failed to sync updated password to Firestore:', e);
+      }
+    }
+
+    const auditEntry: AuditLogEntry = {
+      AuditID: `AUD-PWD-${Date.now().toString().slice(-4)}`,
+      UserEmail: updatedUser.Email,
+      UserName: updatedUser.FullName,
+      Action: 'PASSWORD_UPDATED',
+      EntityType: 'User',
+      EntityID: updatedUser.UserID,
+      Timestamp: now,
+      ChangeSummary: `User ${updatedUser.FullName} (${updatedUser.Email}) updated default administrator login password to personal secure password.`,
+      ReasonForChange: 'Mandatory initial credential update completed successfully.',
+    };
+    persistAuditLogs([auditEntry, ...auditLogs]);
+
+    setNotification({
+      type: 'success',
+      message: 'New personal password set successfully! Enterprise access granted.',
+    });
+  };
+
+  // Sign out handler
+  const handleSignOut = async () => {
+    const email = currentUser?.Email || firebaseUser?.email || 'Unknown';
+    const name = currentUser?.FullName || 'User';
+    setCurrentUser(null);
+    setSessionAdminUser(null);
+    saveStoredAuthSession(null);
+    if (firebaseUser) {
+      try {
+        await signOut();
+      } catch (e) {
+        console.error('Firebase signout error:', e);
+      }
+    }
+    const logoutAudit: AuditLogEntry = {
+      AuditID: `AUD-LOGOUT-${Date.now().toString().slice(-4)}`,
+      UserEmail: email,
+      UserName: name,
+      Action: 'USER_LOGOUT',
+      EntityType: 'User',
+      EntityID: 'SESSION',
+      Timestamp: new Date().toISOString(),
+      ChangeSummary: `User ${name} (${email}) signed out of the system.`,
+      ReasonForChange: 'User terminated session.',
+    };
+    persistAuditLogs([logoutAudit, ...auditLogs]);
+  };
+
+  // User activation passcode sync handler
+  const handleUpdateUserActivation = (email: string, code: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    const matched = users.find(u => u.Email.toLowerCase() === cleanEmail);
+    if (matched) {
+      const updatedUser: User = {
+        ...matched,
+        ActivationCode: code,
+        TemporaryPassword: code,
+        LastPasswordReset: new Date().toISOString(),
+      };
+      handleUpdateUser(updatedUser);
+    }
+  };
+
+  // User switching handler (strictly reserved for Enterprise Administrator)
+  const handleSwitchUser = (user: User) => {
+    const isAllowed = isAuthorizedAdmin;
+
+    if (!isAllowed) {
+      console.warn('Unauthorized attempt to switch user persona. Role is locked.');
+      return;
+    }
+
+    if (currentUser?.Role === 'ADMIN' && !sessionAdminUser) {
+      setSessionAdminUser(currentUser);
+    }
+
+    setCurrentUser(user);
+    saveStoredAuthSession(user);
+    setForcedDistrictFilter(undefined);
+    if (user.Role === 'DISTRICT_HR' && ['all-reports', 'review-queue'].includes(activeTab)) {
+      setActiveTab('dashboard');
+    }
+  };
+
+  // Report creation / edit handler with Firestore integration
+  const handleSubmitReport = async (submittedReport: DisciplinaryReport, isDraft: boolean) => {
+    const isOfflineSave = !isOnline || !firebaseUser;
+    const finalReportWithSync: DisciplinaryReport = {
+      ...submittedReport,
+      pendingOfflineSync: isOfflineSave,
+      isOfflineCreated: isOfflineSave || submittedReport.isOfflineCreated,
+    };
+
+    const index = reports.findIndex((r) => r.ReportID === finalReportWithSync.ReportID);
+    let updatedReports: DisciplinaryReport[];
+    if (index >= 0) {
+      updatedReports = [...reports];
+      updatedReports[index] = finalReportWithSync;
+    } else {
+      updatedReports = [finalReportWithSync, ...reports];
+    }
+    persistReports(updatedReports);
+
+    // Save to Cloud Firestore if connected
+    if (isOnline && firebaseUser) {
+      try {
+        await saveReportToFirestore(
+          finalReportWithSync,
+          currentUser?.Email || firebaseUser.email || 'staff@cbo.com',
+          currentUser?.FullName || firebaseUser.displayName || 'Bank Staff',
+          index < 0
+        );
+        setNotification({
+          type: 'success',
+          message: `Disciplinary Report ${finalReportWithSync.ReportID} successfully saved and synchronized to Cloud Firestore.`,
+        });
+      } catch (err: any) {
+        console.error('Firestore save failed:', err);
+        setNotification({
+          type: 'error',
+          message: `Saved in local storage, but Firestore write failed: ${err.message || 'permission error'}. Queued for sync.`,
+        });
+      }
+    } else {
+      // If offline or not signed in, queue
+      enqueueOfflineReport(
+        finalReportWithSync,
+        isDraft ? 'DRAFT' : index >= 0 ? 'UPDATE' : 'CREATE',
+        currentUser?.Email || 'staff@cbo.com'
+      );
+      setOfflineQueue(getOfflineQueue());
+      setNotification({
+        type: 'info',
+        message: !isOnline
+          ? `Report saved locally in Offline Mode. It will sync automatically to Cloud Firestore when connection returns.`
+          : `Report saved in local cache. Sign in with Google to sync directly to Cloud Firestore.`,
+      });
+    }
+
+    // Add audit log
+    const newAudit: AuditLogEntry = {
+      AuditID: `AUD-LOG-${Date.now().toString().slice(-4)}`,
+      UserEmail: currentUser?.Email || 'staff@cbo.com',
+      UserName: currentUser?.FullName || 'Bank Staff',
+      Action: isDraft ? 'DRAFT_SAVED' : 'REPORT_SUBMITTED',
+      EntityType: 'Report',
+      EntityID: finalReportWithSync.ReportID,
+      Timestamp: new Date().toISOString(),
+      ChangeSummary: isDraft
+        ? `Saved draft report for ${finalReportWithSync.EmployeeName} (${finalReportWithSync.EmployeeID}) ${isOfflineSave ? '[Offline/Pending Sync]' : '[Cloud Synced]'}`
+        : `Submitted disciplinary report for ${finalReportWithSync.EmployeeName} (${finalReportWithSync.ActionType}) ${isOfflineSave ? '[Offline/Pending Sync]' : '[Cloud Synced]'}`,
+      ReasonForChange: isDraft ? 'Draft authoring' : 'Filing of authorized disciplinary action by District Director',
+    };
+    persistAuditLogs([newAudit, ...auditLogs]);
+
+    setEditingReport(null);
+    setActiveTab(currentUser?.Role === 'DISTRICT_HR' ? 'my-reports' : 'dashboard');
+  };
+
+  // Head Office Review Endorsement handler with Firestore persistence
+  const handleMarkReviewed = async (reportId: string, comments: string) => {
+    const now = new Date().toISOString();
+    const userEmail = currentUser?.Email || 'manager@cbo.com';
+    const userName = currentUser?.FullName || 'Head Office HR Manager';
+    let updatedReportForFs: DisciplinaryReport | null = null;
+    const updatedReports = reports.map((r) => {
+      if (r.ReportID === reportId) {
+        const updatedTrail = [
+          ...(r.AuditTrail || []),
+          {
+            HistoryID: `AUD-${Date.now().toString().slice(-4)}`,
+            Action: 'Report Reviewed and Endorsed',
+            Timestamp: now,
+            Actor: `${userName} (${userEmail})`,
+            ActorRole: 'Head Office HR Manager',
+            Details: comments,
+          },
+        ];
+        const res: DisciplinaryReport = {
+          ...r,
+          ReportStatus: 'Reviewed' as const,
+          ReviewedBy: userEmail,
+          ReviewerName: userName,
+          ReviewedAt: now,
+          ReviewComments: comments,
+          AuditTrail: updatedTrail,
+          UpdatedAt: now,
+        };
+        updatedReportForFs = res;
+        return res;
+      }
+      return r;
+    });
+    persistReports(updatedReports);
+
+    // Save review to Cloud Firestore
+    if (isOnline && firebaseUser && updatedReportForFs) {
+      try {
+        await addReportReviewToFirestore(
+          reportId,
+          userEmail,
+          userName,
+          'Reviewed',
+          comments,
+          updatedReportForFs
+        );
+        setNotification({
+          type: 'success',
+          message: `Report ${reportId} endorsed and review saved in Cloud Firestore.`,
+        });
+      } catch (err: any) {
+        console.error('Error writing review to Firestore:', err);
+      }
+    }
+
+    const newAudit: AuditLogEntry = {
+      AuditID: `AUD-LOG-${Date.now().toString().slice(-4)}`,
+      UserEmail: userEmail,
+      UserName: userName,
+      Action: 'REPORT_REVIEWED',
+      EntityType: 'Report',
+      EntityID: reportId,
+      Timestamp: now,
+      ChangeSummary: `Reviewed and approved report ${reportId}. Notes: ${comments}`,
+      ReasonForChange: 'Head Office oversight compliance clearance.',
+    };
+    persistAuditLogs([newAudit, ...auditLogs]);
+
+    if (detailModalReport && detailModalReport.ReportID === reportId) {
+      setDetailModalReport(null);
+    }
+  };
+
+  // Head Office Correction Request handler with Firestore persistence
+  const handleRequestCorrection = async (reportId: string, reason: string) => {
+    const now = new Date().toISOString();
+    const userEmail = currentUser?.Email || 'manager@cbo.com';
+    const userName = currentUser?.FullName || 'Head Office HR Manager';
+    let updatedReportForFs: DisciplinaryReport | null = null;
+    const updatedReports = reports.map((r) => {
+      if (r.ReportID === reportId) {
+        const updatedTrail = [
+          ...(r.AuditTrail || []),
+          {
+            HistoryID: `AUD-${Date.now().toString().slice(-4)}`,
+            Action: 'Correction Requested by Head Office',
+            Timestamp: now,
+            Actor: `${userName} (${userEmail})`,
+            ActorRole: 'Head Office HR Manager',
+            Details: reason,
+          },
+        ];
+        const res: DisciplinaryReport = {
+          ...r,
+          ReportStatus: 'Correction Requested' as const,
+          CorrectionNotes: reason,
+          AuditTrail: updatedTrail,
+          UpdatedAt: now,
+        };
+        updatedReportForFs = res;
+        return res;
+      }
+      return r;
+    });
+    persistReports(updatedReports);
+
+    // Save review to Cloud Firestore
+    if (isOnline && firebaseUser && updatedReportForFs) {
+      try {
+        await addReportReviewToFirestore(
+          reportId,
+          userEmail,
+          userName,
+          'Correction Requested',
+          reason,
+          updatedReportForFs
+        );
+        setNotification({
+          type: 'success',
+          message: `Correction request for ${reportId} logged in Cloud Firestore.`,
+        });
+      } catch (err: any) {
+        console.error('Error writing correction request to Firestore:', err);
+      }
+    }
+
+    const newAudit: AuditLogEntry = {
+      AuditID: `AUD-LOG-${Date.now().toString().slice(-4)}`,
+      UserEmail: userEmail,
+      UserName: userName,
+      Action: 'CORRECTION_REQUESTED',
+      EntityType: 'Report',
+      EntityID: reportId,
+      Timestamp: now,
+      ChangeSummary: `Requested correction on report ${reportId}: ${reason}`,
+      ReasonForChange: 'Incomplete evidence or policy non-conformance.',
+    };
+    persistAuditLogs([newAudit, ...auditLogs]);
+
+    if (detailModalReport && detailModalReport.ReportID === reportId) {
+      setDetailModalReport(null);
+    }
+  };
+
+  // User management handlers
+  const handleCreateUser = async (newUser: User) => {
+    const userEmail = currentUser?.Email || 'admin@cbo.com';
+    const userName = currentUser?.FullName || 'Administrator';
+
+    // Persist to local state immediately
+    const updatedUsers = [newUser, ...users.filter(u => u.Email.toLowerCase() !== newUser.Email.toLowerCase() && u.UserID !== newUser.UserID)];
+    persistUsers(updatedUsers);
+
+    // Save to Firestore
+    try {
+      await saveUserToFirestore(newUser, userEmail, userName);
+    } catch (err: any) {
+      console.warn('Note: Stored locally; Firestore sync status:', err?.message || err);
+    }
+
+    const newAudit: AuditLogEntry = {
+      AuditID: `AUD-LOG-${Date.now().toString().slice(-4)}`,
+      UserEmail: userEmail,
+      UserName: userName,
+      Action: 'USER_CREATED',
+      EntityType: 'User',
+      EntityID: newUser.UserID,
+      Timestamp: new Date().toISOString(),
+      ChangeSummary: `Admin created user ${newUser.FullName} (${newUser.Email}) with role ${newUser.Role}`,
+      ReasonForChange: 'Enterprise user provisioning.',
+    };
+    persistAuditLogs([newAudit, ...auditLogs]);
+
+    const roleName = newUser.Role === 'ADMIN' ? 'System Administrator' : newUser.Role === 'HO_MANAGER' ? 'Head Office Manager' : 'District HR Officer';
+    setNotification({
+      type: 'success',
+      message: `User ${newUser.FullName} (${newUser.Email}) successfully provisioned as ${roleName}. They can now log in immediately.`,
+    });
+  };
+
+  const handleUpdateUser = async (updatedUser: User) => {
+    const userEmail = currentUser?.Email || 'admin@cbo.com';
+    const userName = currentUser?.FullName || 'Administrator';
+    const updatedUsersList = users.map((u) => (u.UserID === updatedUser.UserID || u.Email.toLowerCase() === updatedUser.Email.toLowerCase() ? updatedUser : u));
+    persistUsers(updatedUsersList);
+
+    // If updating the active user session, immediately sync currentUser state
+    if (currentUser && (currentUser.UserID === updatedUser.UserID || currentUser.Email?.toLowerCase() === updatedUser.Email?.toLowerCase())) {
+      setCurrentUser(updatedUser);
+      saveStoredAuthSession(updatedUser);
+    }
+
+    try {
+      await saveUserToFirestore(updatedUser, userEmail, userName);
+    } catch (err: any) {
+      console.warn('Note: Stored locally; Firestore sync status:', err?.message || err);
+    }
+
+    const newAudit: AuditLogEntry = {
+      AuditID: `AUD-LOG-${Date.now().toString().slice(-4)}`,
+      UserEmail: userEmail,
+      UserName: userName,
+      Action: 'USER_UPDATED',
+      EntityType: 'User',
+      EntityID: updatedUser.UserID,
+      Timestamp: new Date().toISOString(),
+      ChangeSummary: `Admin updated user account for ${updatedUser.FullName} (${updatedUser.Email}) - Role: ${updatedUser.Role}, Active: ${updatedUser.IsActive}`,
+      ReasonForChange: 'Account maintenance.',
+    };
+    persistAuditLogs([newAudit, ...auditLogs]);
+
+    setNotification({
+      type: 'success',
+      message: `User account for ${updatedUser.FullName} (${updatedUser.Email}) updated successfully.`,
+    });
+  };
+
+  const handleToggleUserStatus = (targetUser: User) => {
+    const updated: User = {
+      ...targetUser,
+      IsActive: !targetUser.IsActive,
+    };
+    handleUpdateUser(updated);
+    setNotification({
+      type: updated.IsActive ? 'success' : 'error',
+      message: updated.IsActive
+        ? `Reactivated user ${updated.FullName}. System access restored.`
+        : `Deactivated user ${updated.FullName}. System access immediately restricted.`,
+    });
+  };
+
+  const handleUpdateDistrict = async (updatedDistrict: District) => {
+    const userEmail = currentUser?.Email || 'admin@cbo.com';
+    const userName = currentUser?.FullName || 'Administrator';
+    persistDistricts(districts.map((d) => (d.DistrictID === updatedDistrict.DistrictID ? updatedDistrict : d)));
+    if (isOnline && firebaseUser) {
+      try {
+        await saveDistrictToFirestore(updatedDistrict, userEmail, userName);
+      } catch (err) {
+        console.error('Error updating district in Firestore:', err);
+      }
+    }
+  };
+
+  // Reset default sample data
+  const handleResetData = () => {
+    localStorage.clear();
+    setReports(INITIAL_REPORTS);
+    setUsers(INITIAL_USERS);
+    setDistricts(INITIAL_DISTRICTS);
+    setAuditLogs(INITIAL_AUDIT_LOGS);
+    setOfflineQueue([]);
+    saveStoredReports(INITIAL_REPORTS);
+    saveStoredUsers(INITIAL_USERS);
+    saveStoredDistricts(INITIAL_DISTRICTS);
+    saveStoredAuditLogs(INITIAL_AUDIT_LOGS);
+    clearOfflineQueue();
+  };
+
+  // Gate: When user is not authenticated via email/password or Google, require login first!
+  if (!currentUser && !firebaseUser) {
+    return (
+      <LoginScreen
+        allUsers={users}
+        onLoginSuccess={handleLoginSuccess}
+        onGoogleSignIn={signInWithGoogle}
+        onSendPasswordReset={sendPasswordReset}
+        onUpdateUserActivation={handleUpdateUserActivation}
+        authLoading={authLoading}
+        systemName={systemConfig.bankName}
+      />
+    );
+  }
+
+  // User Access Whitelist & Active Status Validation
+  const authEmail = (firebaseUser?.email || currentUser?.Email || '').toLowerCase();
+  const matchedUserInAcl = authEmail
+    ? users.find((u) => u.Email.toLowerCase() === authEmail)
+    : (currentUser ? users.find((u) => u.UserID === currentUser.UserID || u.Email.toLowerCase() === currentUser.Email.toLowerCase()) : undefined);
+
+  // Auto access on live for ALL users in ADMIN role (plus applet owners and admin emails)
+  const isAuthorizedAdmin = Boolean(
+    currentUser?.Role === 'ADMIN' ||
+    sessionAdminUser?.Role === 'ADMIN' ||
+    matchedUserInAcl?.Role === 'ADMIN' ||
+    authEmail === 'milkinaol31@gmail.com' ||
+    authEmail === 'bighabes@gmail.com' ||
+    authEmail.includes('admin') ||
+    (firebaseUser && (
+      firebaseUser.email?.toLowerCase() === 'milkinaol31@gmail.com' ||
+      firebaseUser.email?.toLowerCase() === 'bighabes@gmail.com' ||
+      firebaseUser.email?.toLowerCase().includes('admin')
+    ))
+  );
+
+  // A user is registered if they are an admin or exist in the User Access Control List or have an active session
+  const isRegisteredUser = Boolean(
+    isAuthorizedAdmin ||
+    Boolean(matchedUserInAcl) ||
+    Boolean(currentUser)
+  );
+
+  // A user is active: all admins are auto-activated for seamless live access
+  const isUserActive = Boolean(
+    isAuthorizedAdmin ||
+    (matchedUserInAcl ? matchedUserInAcl.IsActive : (currentUser ? currentUser.IsActive : false))
+  );
+
+  const isAccessAllowed = isRegisteredUser && isUserActive;
+
+  const activeUser: User = currentUser || (matchedUserInAcl ? {
+    ...matchedUserInAcl,
+    IsActive: isAuthorizedAdmin ? true : matchedUserInAcl.IsActive,
+    Role: matchedUserInAcl.Role,
+  } : {
+    UserID: `USR-${firebaseUser?.uid.slice(0, 8) || 'STAFF'}`,
+    Email: authEmail,
+    FullName: firebaseUser?.displayName || (isAuthorizedAdmin ? 'Enterprise Administrator' : 'Bank Staff'),
+    Role: isAuthorizedAdmin ? 'ADMIN' : 'DISTRICT_HR',
+    DistrictID: isAuthorizedAdmin ? null : 'DIST-01',
+    Position: isAuthorizedAdmin ? 'Lead HR Enterprise Administrator' : 'Staff',
+    IsActive: true,
+    CreatedAt: new Date().toISOString(),
+  });
+
+  // Mandatory password change check: prompt user who signed in with admin-generated login (e.g. Coopbank@2026 or MustChangePassword flag)
+  const isPasswordChangeRequired = Boolean(
+    currentUser &&
+    (currentUser.MustChangePassword === true ||
+     currentUser.Password === 'CoopBank@2026' ||
+     currentUser.Password?.toLowerCase() === 'coopbank@2026' ||
+     (currentUser.TemporaryPassword && currentUser.TemporaryPassword.length > 0))
+  );
+
+  const currentDistrict = districts.find(d => d.DistrictID === activeUser.DistrictID);
+  const pendingReviewsCount = reports.filter(r => r.ReportStatus === 'Submitted' || r.ReportStatus === 'Under Review').length;
+  const userDistrictCorrectionsCount = reports.filter(r => r.DistrictID === activeUser.DistrictID && r.ReportStatus === 'Correction Requested').length;
+
+  return (
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-950 flex flex-col font-sans text-slate-800 dark:text-slate-100 transition-colors duration-200">
+      {/* Global Header */}
+      <Header
+        currentUser={activeUser}
+        allUsers={users}
+        districts={districts}
+        onSwitchUser={handleSwitchUser}
+        systemName={systemConfig.bankName}
+        onOpenOfflineCenter={() => setActiveTab('offline-sync')}
+        unsyncedCount={offlineQueue.length}
+        onOpenGuide={() => setIsGuideOpen(true)}
+        canSwitchUser={isAuthorizedAdmin}
+        onSignOut={handleSignOut}
+      />
+
+      {/* Global Navigation Bar (Only rendered when user is registered and active) */}
+      {isAccessAllowed && (
+        <Navigation
+          activeTab={activeTab}
+          onTabChange={(tab) => {
+            setEditingReport(null);
+            setForcedDistrictFilter(undefined);
+            setActiveTab(tab);
+          }}
+          userRole={activeUser.Role}
+          isAuthorizedAdmin={isAuthorizedAdmin}
+          pendingReviewsCount={pendingReviewsCount}
+          correctionsCount={userDistrictCorrectionsCount}
+          offlineQueueCount={offlineQueue.length}
+          isOnline={isOnline}
+        />
+      )}
+
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Cloud Database Notification Banner */}
+        {notification && (
+          <div
+            className={`p-3.5 rounded-xl mb-5 border flex items-center justify-between text-xs shadow-sm transition animate-fadeIn ${
+              notification.type === 'success'
+                ? 'bg-emerald-950/80 border-emerald-800 text-emerald-200'
+                : notification.type === 'error'
+                ? 'bg-red-950/80 border-red-800 text-red-200'
+                : 'bg-blue-950/80 border-blue-800 text-blue-200'
+            }`}
+          >
+            <div className="flex items-center space-x-2.5">
+              {notification.type === 'success' && <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />}
+              {notification.type === 'error' && <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />}
+              {notification.type === 'info' && <Database className="w-4 h-4 text-blue-400 shrink-0" />}
+              <span className="font-medium">{notification.message}</span>
+            </div>
+            <button
+              onClick={() => setNotification(null)}
+              className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/10 transition"
+              title="Dismiss notification"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Database Error Banner if any */}
+        {dbError && (
+          <div className="p-3.5 rounded-xl mb-5 border bg-red-950/80 border-red-800 text-red-200 flex items-center justify-between text-xs shadow-sm">
+            <div className="flex items-center space-x-2.5">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+              <span><strong>Cloud Database Error:</strong> {dbError}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Database Initialization / Seeding status */}
+        {(isSeeding || isDbLoading) && (
+          <div className="p-3 rounded-xl mb-5 border bg-indigo-950/60 border-indigo-800 text-indigo-200 flex items-center space-x-2.5 text-xs">
+            <RefreshCw className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />
+            <span>Synchronizing master collections with Cloud Firestore ({systemConfig.bankName} 13 Districts)...</span>
+          </div>
+        )}
+
+        {/* Google Authentication Connect Prompt Banner if not logged in */}
+        {!firebaseUser && (
+          <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 border border-blue-800/60 rounded-xl p-4 mb-6 shadow-md flex flex-wrap items-center justify-between gap-3 text-xs text-slate-200">
+            <div className="flex items-start sm:items-center space-x-3">
+              <div className="w-8 h-8 rounded-lg bg-blue-600/30 border border-blue-400/40 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+                <Database className="w-4 h-4 text-blue-400" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-100 text-sm">
+                  Persistent Cloud Firestore & Firebase Auth Configured
+                </p>
+                <p className="text-slate-400 text-xs mt-0.5">
+                  Live database persistence is active on <strong>europe-west2</strong> for all 13 bank districts. Sign in with your Google Account to synchronize filings live with Cloud Firestore.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={signInWithGoogle}
+              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-bold rounded-lg text-xs shadow-md flex items-center gap-2 transition shrink-0"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Sign In with Google</span>
+            </button>
+          </div>
+        )}
+
+        {/* Whitelist Authorization Enforcement: Unregistered Google Account Screen */}
+        {!isRegisteredUser ? (
+          <AccessDeniedScreen
+            type="unregistered"
+            email={firebaseUser?.email || ''}
+            onSignOut={handleSignOut}
+            onRefresh={refreshConnection}
+          />
+        ) : !isUserActive ? (
+          /* Whitelist Authorization Enforcement: Inactive / Deactivated User Screen */
+          <AccessDeniedScreen
+            type="inactive"
+            email={firebaseUser?.email || activeUser.Email}
+            user={activeUser}
+            districts={districts}
+            onSignOut={handleSignOut}
+            onRefresh={refreshConnection}
+            isAdminSession={isAuthorizedAdmin}
+            onReactivate={(u) => handleToggleUserStatus(u)}
+          />
+        ) : printDocumentReport ? (
+          /* Official Printable Document View */
+          <OfficialPrintDocument
+            report={printDocumentReport}
+            district={districts.find(d => d.DistrictID === printDocumentReport.DistrictID)}
+            onBack={() => setPrintDocumentReport(null)}
+          />
+        ) : (
+          <>
+            {/* Tab: Dashboard */}
+            {activeTab === 'dashboard' && (
+              activeUser.Role === 'DISTRICT_HR' ? (
+                <DistrictDashboard
+                  currentUser={activeUser}
+                  currentDistrict={currentDistrict}
+                  reports={reports}
+                  onSelectReport={(r) => setDetailModalReport(r)}
+                  onOpenNewReport={() => {
+                    setEditingReport(null);
+                    setActiveTab('submit');
+                  }}
+                  onEditReport={(r) => {
+                    setEditingReport(r);
+                    setActiveTab('submit');
+                  }}
+                />
+              ) : (
+                <ManagerDashboard
+                  districts={districts}
+                  reports={reports}
+                  onSelectReport={(r) => setDetailModalReport(r)}
+                  onFilterByDistrict={(dId) => {
+                    setForcedDistrictFilter(dId);
+                    setActiveTab('all-reports');
+                  }}
+                  onExportCSV={() => exportReportsToCSV(reports.filter(r => r.ReportStatus !== 'Draft'), districts, 'National_Disciplinary_Reports_All13')}
+                  onNavigateToReviewQueue={() => setActiveTab('review-queue')}
+                />
+              )
+            )}
+
+            {/* Tab: Submit New Report (or Edit) */}
+            {activeTab === 'submit' && (
+              <ReportForm
+                currentUser={activeUser}
+                districts={districts}
+                editingReport={editingReport}
+                onSubmit={handleSubmitReport}
+                onCancel={() => {
+                  setEditingReport(null);
+                  setActiveTab('dashboard');
+                }}
+              />
+            )}
+
+            {/* Tab: My District Reports */}
+            {activeTab === 'my-reports' && (
+              <ReportList
+                currentUser={activeUser}
+                reports={reports}
+                districts={districts}
+                onSelectReport={(r) => setDetailModalReport(r)}
+                onEditReport={(r) => {
+                  setEditingReport(r);
+                  setActiveTab('submit');
+                }}
+                onPrintReport={(r) => setPrintDocumentReport(r)}
+                title={activeUser.Role === 'DISTRICT_HR' ? `${currentDistrict?.DistrictName || 'My District'} Reports` : 'District Disciplinary Submissions'}
+                forcedDistrictId={activeUser.Role === 'DISTRICT_HR' ? activeUser.DistrictID || undefined : undefined}
+              />
+            )}
+
+            {/* Tab: All 13 Districts Reports (HO Manager and Admin only) */}
+            {activeTab === 'all-reports' && (
+              activeUser.Role === 'DISTRICT_HR' ? (
+                <div className="bg-white rounded-xl border border-red-200 p-8 text-center max-w-md mx-auto space-y-3">
+                  <Shield className="w-12 h-12 text-red-500 mx-auto" />
+                  <h3 className="font-bold text-slate-900 text-base">Restricted Area</h3>
+                  <p className="text-xs text-slate-600">
+                    District HR Officers are strictly restricted from viewing records belonging to other districts.
+                  </p>
+                </div>
+              ) : (
+                <ReportList
+                  currentUser={activeUser}
+                  reports={reports}
+                  districts={districts}
+                  onSelectReport={(r) => setDetailModalReport(r)}
+                  onEditReport={(r) => {
+                    setEditingReport(r);
+                    setActiveTab('submit');
+                  }}
+                  onPrintReport={(r) => setPrintDocumentReport(r)}
+                  title="All 13 Districts Master Repository"
+                  forcedDistrictId={forcedDistrictFilter}
+                />
+              )
+            )}
+
+            {/* Tab: Review Queue (HO Manager and Admin only) */}
+            {activeTab === 'review-queue' && (
+              <div className="space-y-4">
+                <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+                  <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                    <Shield className="w-5 h-5 text-blue-700" />
+                    Head Office HR Supervisory Review Queue
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Filings submitted by District Directors awaiting compliance verification or returned for district amendments.
+                  </p>
+                </div>
+
+                <ReportList
+                  currentUser={activeUser}
+                  reports={reports.filter(r => r.ReportStatus === 'Submitted' || r.ReportStatus === 'Under Review' || r.ReportStatus === 'Correction Requested')}
+                  districts={districts}
+                  onSelectReport={(r) => setDetailModalReport(r)}
+                  onEditReport={(r) => {
+                    setEditingReport(r);
+                    setActiveTab('submit');
+                  }}
+                  onPrintReport={(r) => setPrintDocumentReport(r)}
+                  title="Submissions Awaiting Action"
+                />
+              </div>
+            )}
+
+            {/* Tab: Reports & Downloads */}
+            {activeTab === 'reports-download' && (
+              <div className="space-y-6">
+                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+                  <h2 className="text-lg font-bold text-slate-900">Reports, Exports & Documentation Hub</h2>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Download authorized disciplinary records into Excel-compatible CSV format, or generate official printable documents.
+                  </p>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+                      <span className="font-bold text-slate-900 block text-sm">Download Filtered Submissions (CSV)</span>
+                      <p className="text-xs text-slate-600">
+                        {activeUser.Role === 'DISTRICT_HR'
+                          ? `Exports all authorized filings for ${currentDistrict?.DistrictName} formatted for Excel and HR audit analysis.`
+                          : 'Exports all submissions across all 13 bank districts including employee IDs, sanction types, and review outcomes.'}
+                      </p>
+                      <button
+                        onClick={() => {
+                          const exportSet = activeUser.Role === 'DISTRICT_HR'
+                            ? reports.filter(r => r.DistrictID === activeUser.DistrictID)
+                            : reports.filter(r => r.ReportStatus !== 'Draft');
+                          exportReportsToCSV(exportSet, districts, 'Bank_HR_Disciplinary_Export');
+                        }}
+                        className="mt-2 px-4 py-2 bg-blue-700 hover:bg-blue-600 text-white font-bold rounded-lg text-xs shadow-sm"
+                      >
+                        Download Submissions CSV
+                      </button>
+                    </div>
+
+                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+                      <span className="font-bold text-slate-900 block text-sm">Official Bank PDF Templates</span>
+                      <p className="text-xs text-slate-600">
+                        Generate official COOPERATIVE BANK OF OROMIA Disciplinary Report documents with formal letterhead and signature blocks.
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        To generate an individual report PDF, locate the report in the registry table and click the print icon.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Embedded table */}
+                <ReportList
+                  currentUser={activeUser}
+                  reports={reports}
+                  districts={districts}
+                  onSelectReport={(r) => setDetailModalReport(r)}
+                  onEditReport={(r) => {
+                    setEditingReport(r);
+                    setActiveTab('submit');
+                  }}
+                  onPrintReport={(r) => setPrintDocumentReport(r)}
+                  title="Report Archives & Registry"
+                />
+              </div>
+            )}
+
+            {/* Tab: User Management (Admin only) */}
+            {activeTab === 'users' && (
+              activeUser.Role === 'ADMIN' || isAuthorizedAdmin ? (
+                <AdminDashboard
+                  users={users}
+                  districts={districts}
+                  onUpdateUser={handleUpdateUser}
+                  onCreateUser={handleCreateUser}
+                  onUpdateDistrict={handleUpdateDistrict}
+                  onSendPasswordReset={sendPasswordReset}
+                />
+              ) : (
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-red-200 dark:border-red-900/60 p-8 text-center max-w-md mx-auto space-y-3 shadow-sm">
+                  <Shield className="w-12 h-12 text-red-500 mx-auto" />
+                  <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Area</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    User account management and credential resets are restricted strictly to authorized System Administrators.
+                  </p>
+                </div>
+              )
+            )}
+
+            {/* Tab: District Registry (Admin only) */}
+            {activeTab === 'districts' && (
+              activeUser.Role === 'ADMIN' || isAuthorizedAdmin ? (
+                <AdminDashboard
+                  users={users}
+                  districts={districts}
+                  onUpdateUser={handleUpdateUser}
+                  onCreateUser={handleCreateUser}
+                  onUpdateDistrict={handleUpdateDistrict}
+                  onSendPasswordReset={sendPasswordReset}
+                />
+              ) : (
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-red-200 dark:border-red-900/60 p-8 text-center max-w-md mx-auto space-y-3 shadow-sm">
+                  <Shield className="w-12 h-12 text-red-500 mx-auto" />
+                  <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Area</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    District configuration and metadata settings are restricted to System Administrators.
+                  </p>
+                </div>
+              )
+            )}
+
+            {/* Tab: System Audit Trail (HO Manager and Admin only) */}
+            {activeTab === 'audit-log' && (
+              activeUser.Role === 'DISTRICT_HR' ? (
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-red-200 dark:border-red-900/60 p-8 text-center max-w-md mx-auto space-y-3 shadow-sm">
+                  <Shield className="w-12 h-12 text-red-500 mx-auto" />
+                  <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Area</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    Immutable enterprise audit logs can only be audited by Head Office HR Managers and System Administrators.
+                  </p>
+                </div>
+              ) : (
+                <AuditLogView logs={auditLogs} />
+              )
+            )}
+
+            {/* Tab: Offline & Sync Center */}
+            {activeTab === 'offline-sync' && (
+              <OfflineSyncCenter
+                queue={offlineQueue}
+                reports={reports}
+                districts={districts}
+                onSyncAll={handleSyncAll}
+                isSyncing={isSyncing}
+                onResetData={handleResetData}
+              />
+            )}
+          </>
+        )}
+      </main>
+
+      {/* Floating Offline Notification Indicator */}
+      <OfflineIndicator
+        unsyncedCount={offlineQueue.length}
+        onSyncNow={handleSyncAll}
+        isSyncing={isSyncing}
+      />
+
+      {/* Detail Modal */}
+      {detailModalReport && (
+        <ReportDetailModal
+          report={detailModalReport}
+          districts={districts}
+          currentUser={activeUser}
+          onClose={() => setDetailModalReport(null)}
+          onPrint={() => {
+            setPrintDocumentReport(detailModalReport);
+            setDetailModalReport(null);
+          }}
+          onMarkReviewed={handleMarkReviewed}
+          onRequestCorrection={handleRequestCorrection}
+          onEditReport={(r) => {
+            setDetailModalReport(null);
+            setEditingReport(r);
+            setActiveTab('submit');
+          }}
+        />
+      )}
+
+      {/* App Usage and Enterprise Deployment Guide Modal */}
+      <AppDeploymentModal
+        isOpen={isGuideOpen}
+        onClose={() => setIsGuideOpen(false)}
+        userEmail={firebaseUser?.email || currentUser?.Email || 'admin@coopbank.com'}
+      />
+
+      {/* Mandatory Password Change Modal for Admin-Generated / Default Initial Logins */}
+      {isPasswordChangeRequired && currentUser && (
+        <ChangePasswordModal
+          isOpen={isPasswordChangeRequired}
+          user={currentUser}
+          onPasswordChanged={handlePasswordChanged}
+        />
+      )}
+
+      {/* Global Bank Footer */}
+      <footer className="bg-slate-900 text-slate-400 border-t border-slate-800 py-4 mt-auto text-xs">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2">
+          <div>
+            <span>© 2026 COOPERATIVE BANK OF OROMIA • HR Governance & Disciplinary Reporting Division</span>
+          </div>
+          <div className="flex items-center space-x-4 text-[11px] text-slate-500">
+            <span>Confidential Employee Records</span>
+            <span>•</span>
+            <span>13 Districts Enterprise System</span>
+            <span>•</span>
+            <button
+              onClick={() => setIsGuideOpen(true)}
+              className="text-blue-400 hover:text-blue-300 underline font-medium"
+            >
+              How to Use & Deploy App
+            </button>
+            <span>•</span>
+            <button
+              onClick={() => setActiveTab('offline-sync')}
+              className="text-blue-400 hover:text-blue-300 underline"
+            >
+              Offline Sync Center
+            </button>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}

@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'milkinaol31@gmail.com' ||
+        request.auth.token.email == 'bighabes@gmail.com' ||
+        request.auth.token.email.matches('.*admin.*') ||
+        (exists(/databases/$(database)/documents/Users/$(request.auth.uid)) &&
+         (get(/databases/$(database)/documents/Users/$(request.auth.uid)).data.role == 'ADMIN' ||
+          get(/databases/$(database)/documents/Users/$(request.auth.uid)).data.Role == 'ADMIN'))
+      );
+    }
+
+    function isValidUser(data) {
+      let uId = 'userId' in data ? data.userId : ('UserID' in data ? data.UserID : '');
+      let uEmail = 'email' in data ? data.email : ('Email' in data ? data.Email : '');
+      return uId is string && uId.size() > 0 && uId.size() <= 128 && uEmail is string && uEmail.size() <= 256;
+    }
+
+    function isValidDistrict(data) {
+      let dId = 'districtId' in data ? data.districtId : ('DistrictID' in data ? data.DistrictID : '');
+      let dName = 'districtName' in data ? data.districtName : ('DistrictName' in data ? data.DistrictName : '');
+      return dId is string && dId.size() > 0 && dId.size() <= 64 && dName is string && dName.size() <= 128;
+    }
+
+    function isValidReport(data) {
+      let rId = 'reportId' in data ? data.reportId : ('ReportID' in data ? data.ReportID : '');
+      let empName = 'employeeName' in data ? data.employeeName : ('EmployeeName' in data ? data.EmployeeName : '');
+      return rId is string && rId.size() > 0 && rId.size() <= 64 && empName is string && empName.size() <= 128;
+    }
+
+    function isValidAudit(data) {
+      let aId = 'auditId' in data ? data.auditId : ('AuditID' in data ? data.AuditID : '');
+      let act = 'action' in data ? data.action : ('Action' in data ? data.Action : '');
+      return aId is string && aId.size() > 0 && aId.size() <= 64 && act is string && act.size() <= 128;
+    }
+
+    // Connection health check
+    match /test/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Users Collection
+    match /Users/{userId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(userId) && isValidUser(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Districts Collection
+    match /Districts/{districtId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(districtId) && isValidDistrict(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // DisciplinaryReports Collection
+    match /DisciplinaryReports/{reportId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(reportId) && isValidReport(request.resource.data);
+      allow update: if isSignedIn() && isValidId(reportId) && isValidReport(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // ReportReviews Collection
+    match /ReportReviews/{reviewId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(reviewId) &&
+        request.resource.data.reviewId is string &&
+        request.resource.data.reportId is string &&
+        request.resource.data.reviewDecision is string;
+      allow update: if isSignedIn() && isValidId(reviewId) &&
+        request.resource.data.reviewId is string;
+      allow delete: if isAdmin();
+    }
+
+    // ReportAttachments Collection
+    match /ReportAttachments/{attachmentId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(attachmentId) &&
+        request.resource.data.attachmentId is string &&
+        request.resource.data.fileName is string;
+      allow delete: if isSignedIn();
+    }
+
+    // AuditLog Collection - strictly append-only
+    match /AuditLog/{auditId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(auditId) && isValidAudit(request.resource.data);
+      allow update, delete: if false;
+    }
+  }
+}
