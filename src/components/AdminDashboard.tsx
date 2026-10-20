@@ -563,31 +563,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </td>
                         <td className="py-3 px-3.5">
                           <div className="flex flex-col items-start gap-1">
-                            {u.Role === 'ADMIN' && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
-                                System Administrator
-                              </span>
-                            )}
-                            {u.Role === 'HO_MANAGER' && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                                Head Office Manager
-                              </span>
-                            )}
-                            {u.Role === 'DISTRICT_HR' && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                                District HR Officer
-                              </span>
-                            )}
-                            {u.Role === 'AUDITOR' && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                                Compliance Auditor
-                              </span>
-                            )}
-                            {u.Role === 'DIRECTOR' && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                                District Director
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {u.Role === 'ADMIN' && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                                  System Administrator
+                                </span>
+                              )}
+                              {u.Role === 'HO_MANAGER' && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                                  Head Office Manager
+                                </span>
+                              )}
+                              {u.Role === 'DISTRICT_HR' && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                  District HR Officer
+                                </span>
+                              )}
+                              {u.Role === 'AUDITOR' && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                  Compliance Auditor
+                                </span>
+                              )}
+                              {u.Role === 'DIRECTOR' && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                  District Director
+                                </span>
+                              )}
+
+                              {/* Quick Role Switcher for instant live effect */}
+                              <select
+                                value={u.Role}
+                                onChange={(e) => {
+                                  const newRole = e.target.value as UserRole;
+                                  const defaultPos = newRole === 'ADMIN'
+                                    ? 'Enterprise System Administrator'
+                                    : newRole === 'HO_MANAGER'
+                                    ? 'Head Office HR Manager'
+                                    : newRole === 'AUDITOR'
+                                    ? 'Internal Compliance Auditor'
+                                    : newRole === 'DIRECTOR'
+                                    ? 'Authorized District Director'
+                                    : 'District HR Officer';
+                                  const isDist = newRole === 'DISTRICT_HR' || newRole === 'DIRECTOR';
+                                  onUpdateUser({
+                                    ...u,
+                                    Role: newRole,
+                                    DistrictID: isDist ? (u.DistrictID || 'DIST-01') : null,
+                                    Position: defaultPos,
+                                  });
+                                  setActionSuccessMessage(`Role for ${u.FullName} (${u.Email}) updated to ${getRoleLabel(newRole)}. Immediate effect applied!`);
+                                }}
+                                className="text-[10px] bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-1.5 py-0.5 font-medium text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500 cursor-pointer hover:border-purple-400"
+                                title="Change role immediately"
+                              >
+                                <option value="ADMIN">Switch to Admin</option>
+                                <option value="DISTRICT_HR">Switch to District HR</option>
+                                <option value="HO_MANAGER">Switch to HO Manager</option>
+                                <option value="AUDITOR">Switch to Auditor</option>
+                                <option value="DIRECTOR">Switch to Director</option>
+                              </select>
+                            </div>
                             <span className="text-[10px] text-slate-500 dark:text-slate-400">{u.Position}</span>
                           </div>
                         </td>

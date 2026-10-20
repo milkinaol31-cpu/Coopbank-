@@ -90,50 +90,34 @@ export async function seedInitialDataIfEmpty(): Promise<boolean> {
         }
       }
 
-      // Ensure Lead Admins are present in Users collection
-      const seedAdmins = [
-        {
-          id: 'USR-ADMIN-00',
-          email: 'milkinaol31@gmail.com',
-          name: 'Lead HR Enterprise Administrator',
-        },
-        {
-          id: 'USR-ADMIN-01',
-          email: 'bighabes@gmail.com',
-          name: 'Lead HR Enterprise Administrator',
-        },
-        {
-          id: 'USR-ADMIN-GEN',
-          email: 'admin@coopbank.com',
-          name: 'Enterprise System Administrator',
-        },
-      ];
-
-      for (const sa of seedAdmins) {
-        const adminDocRef = doc(db, COLLECTIONS.USERS, sa.id);
-        await setDoc(adminDocRef, {
-          userId: sa.id,
-          UserID: sa.id,
-          email: sa.email,
-          Email: sa.email,
-          fullName: sa.name,
-          FullName: sa.name,
-          role: 'ADMIN',
-          Role: 'ADMIN',
-          districtId: '',
-          DistrictID: null,
-          position: 'Enterprise Administrator',
-          Position: 'Enterprise Administrator',
-          isActive: true,
-          IsActive: true,
-          createdAt: '2024-09-01T08:00:00Z',
-          CreatedAt: '2024-09-01T08:00:00Z',
-          lastLogin: new Date().toISOString(),
-          LastLogin: new Date().toISOString(),
+      // Ensure all initial bank users (including naolcbo@gmail.com and Lead Admins) are provisioned in Users collection
+      for (const u of INITIAL_USERS) {
+        const userDocRef = doc(db, COLLECTIONS.USERS, u.UserID);
+        await setDoc(userDocRef, {
+          userId: u.UserID,
+          UserID: u.UserID,
+          email: u.Email,
+          Email: u.Email,
+          fullName: u.FullName,
+          FullName: u.FullName,
+          role: u.Role,
+          Role: u.Role,
+          districtId: u.DistrictID || '',
+          DistrictID: u.DistrictID,
+          position: u.Position,
+          Position: u.Position,
+          isActive: u.IsActive,
+          IsActive: u.IsActive,
+          createdAt: u.CreatedAt || new Date().toISOString(),
+          CreatedAt: u.CreatedAt || new Date().toISOString(),
+          lastLogin: u.LastLogin || new Date().toISOString(),
+          LastLogin: u.LastLogin || new Date().toISOString(),
+          password: u.Password || 'CoopBank@2026',
+          Password: u.Password || 'CoopBank@2026',
         }, { merge: true }).catch(console.error);
       }
 
-      return false; // Already seeded
+      return true;
     }
 
     // Seed Districts
@@ -764,6 +748,42 @@ export function subscribeUsers(
       handleFirestoreError(error, OperationType.GET, path);
     }
   );
+}
+
+export async function fetchUserByEmailFromFirestore(email: string): Promise<User | null> {
+  if (!email) return null;
+  const cleanEmail = email.trim().toLowerCase();
+  const path = COLLECTIONS.USERS;
+  try {
+    const snap = await getDocs(collection(db, path));
+    let found: User | null = null;
+    snap.forEach((docSnap) => {
+      const d = docSnap.data();
+      const docEmail = (d.Email || d.email || '').toString().trim().toLowerCase();
+      if (docEmail === cleanEmail) {
+        found = {
+          UserID: d.UserID || d.userId || docSnap.id,
+          Email: d.Email || d.email || '',
+          FullName: d.FullName || d.fullName || '',
+          Role: d.Role || d.role || 'DISTRICT_HR',
+          DistrictID: d.DistrictID || d.districtId || null,
+          Position: d.Position || d.position || '',
+          IsActive: !!(d.IsActive ?? d.isActive),
+          CreatedAt: d.CreatedAt || d.createdAt || new Date().toISOString(),
+          LastLogin: d.LastLogin || d.lastLogin,
+          Password: d.Password || d.password || 'CoopBank@2026',
+          TemporaryPassword: d.TemporaryPassword || d.temporaryPassword,
+          MustChangePassword: !!(d.MustChangePassword ?? d.mustChangePassword),
+          ActivationCode: d.ActivationCode || d.activationCode,
+          LastPasswordReset: d.LastPasswordReset || d.lastPasswordReset,
+        };
+      }
+    });
+    return found;
+  } catch (err) {
+    console.warn('Direct Firestore user fetch error:', err);
+    return null;
+  }
 }
 
 export async function saveUserToFirestore(user: User, actorEmail: string, actorName: string): Promise<void> {

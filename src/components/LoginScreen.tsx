@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { User } from '../types';
 import { loadStoredUsers } from '../utils/offlineStorage';
+import { fetchUserByEmailFromFirestore } from '../services/firebaseDb';
 
 interface LoginScreenProps {
   allUsers: User[];
@@ -77,20 +78,32 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setIsSubmitting(true);
 
     try {
-      // 1. Strict Whitelist Check in User Access Control List
       // 1. Registered Account Check across active state and stored directory
-      let matchedUser = allUsers.find((u) => u.Email.toLowerCase() === cleanEmail) ||
-        loadStoredUsers().find((u) => u.Email.toLowerCase() === cleanEmail);
+      let matchedUser = allUsers.find((u) => u.Email.toLowerCase().trim() === cleanEmail) ||
+        loadStoredUsers().find((u) => u.Email.toLowerCase().trim() === cleanEmail);
 
-      // Auto-permit Lead Administrators even if initial sync is pending
-      if (!matchedUser && (cleanEmail === 'milkinaol31@gmail.com' || cleanEmail === 'bighabes@gmail.com' || cleanEmail.includes('admin'))) {
+      // If not in local cache, query Firestore master collection directly
+      if (!matchedUser) {
+        try {
+          const remoteUser = await fetchUserByEmailFromFirestore(cleanEmail);
+          if (remoteUser) {
+            matchedUser = remoteUser;
+          }
+        } catch {
+          // fallback
+        }
+      }
+
+      // Auto-permit Lead Administrators or naolcbo@gmail.com even if initial sync is pending
+      if (!matchedUser && (cleanEmail === 'milkinaol31@gmail.com' || cleanEmail === 'bighabes@gmail.com' || cleanEmail === 'naolcbo@gmail.com' || cleanEmail.includes('admin'))) {
+        const isAdminEmail = cleanEmail !== 'naolcbo@gmail.com';
         matchedUser = {
-          UserID: 'USR-ADMIN-AUTO',
+          UserID: cleanEmail === 'naolcbo@gmail.com' ? 'USR-DHR-NAOL' : 'USR-ADMIN-AUTO',
           Email: cleanEmail,
-          FullName: cleanEmail === 'milkinaol31@gmail.com' || cleanEmail === 'bighabes@gmail.com' ? 'Lead HR Enterprise Administrator' : 'System Administrator',
-          Role: 'ADMIN',
-          DistrictID: null,
-          Position: 'Enterprise System Administrator',
+          FullName: cleanEmail === 'naolcbo@gmail.com' ? 'Naol Feyisa' : 'Lead HR Enterprise Administrator',
+          Role: isAdminEmail ? 'ADMIN' : 'DISTRICT_HR',
+          DistrictID: isAdminEmail ? null : 'DIST-01',
+          Position: isAdminEmail ? 'Enterprise System Administrator' : 'District HR Officer - Adama District',
           IsActive: true,
           CreatedAt: new Date().toISOString(),
           Password: 'CoopBank@2026',

@@ -19,6 +19,7 @@ service cloud.firestore {
       return isSignedIn() && (
         request.auth.token.email == 'milkinaol31@gmail.com' ||
         request.auth.token.email == 'bighabes@gmail.com' ||
+        request.auth.token.email == 'naolcbo@gmail.com' ||
         request.auth.token.email.matches('.*admin.*') ||
         (exists(/databases/$(database)/documents/Users/$(request.auth.uid)) &&
          (get(/databases/$(database)/documents/Users/$(request.auth.uid)).data.role == 'ADMIN' ||
@@ -59,7 +60,7 @@ service cloud.firestore {
     // Users Collection
     match /Users/{userId} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidId(userId) && isValidUser(request.resource.data);
+      allow create, update: if isValidId(userId) && isValidUser(request.resource.data);
       allow delete: if isAdmin();
     }
 

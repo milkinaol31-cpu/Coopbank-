@@ -39,6 +39,7 @@ import {
   subscribeDistricts,
   subscribeUsers,
   subscribeAuditLogs,
+  fetchUserByEmailFromFirestore,
 } from './services/firebaseDb';
 import { Header } from './components/Header';
 import { Navigation, NavTab } from './components/Navigation';
@@ -160,18 +161,17 @@ export default function App() {
 
           // Match authenticated Google account with bank user directory
           if (firebaseUser?.email) {
-            const userEmail = firebaseUser.email.toLowerCase();
+            const userEmail = firebaseUser.email.toLowerCase().trim();
             const allLocalUsers = loadStoredUsers();
-            let matched = fsUsers.find((u) => u.Email.toLowerCase() === userEmail) ||
-                          allLocalUsers.find((u) => u.Email.toLowerCase() === userEmail);
+            let matched = fsUsers.find((u) => u.Email.toLowerCase().trim() === userEmail) ||
+                          allLocalUsers.find((u) => u.Email.toLowerCase().trim() === userEmail);
 
-            const isLiveAdminAccount =
+            const isLiveAdminEmail =
               userEmail === 'milkinaol31@gmail.com' ||
               userEmail === 'bighabes@gmail.com' ||
-              userEmail.includes('admin') ||
-              matched?.Role === 'ADMIN';
+              userEmail.includes('admin');
 
-            if (isLiveAdminAccount) {
+            if (isLiveAdminEmail) {
               if (!matched) {
                 const adminUser: User = {
                   UserID: `USR-${firebaseUser.uid.slice(0, 8)}`,
@@ -188,13 +188,23 @@ export default function App() {
                 };
                 saveUserToFirestore(adminUser, firebaseUser.email, adminUser.FullName);
                 matched = adminUser;
-              } else {
-                matched = {
-                  ...matched,
-                  Role: 'ADMIN',
-                  IsActive: true,
-                };
               }
+            } else if (userEmail === 'naolcbo@gmail.com' && !matched) {
+              const naolUser: User = {
+                UserID: 'USR-DHR-NAOL',
+                Email: firebaseUser.email,
+                FullName: firebaseUser.displayName || 'Naol Feyisa',
+                Role: 'DISTRICT_HR',
+                DistrictID: 'DIST-01',
+                Position: 'District HR Officer - Adama District',
+                IsActive: true,
+                Password: '',
+                MustChangePassword: false,
+                CreatedAt: new Date().toISOString(),
+                LastLogin: new Date().toISOString(),
+              };
+              saveUserToFirestore(naolUser, firebaseUser.email, naolUser.FullName);
+              matched = naolUser;
             }
 
             if (matched) {
@@ -202,16 +212,20 @@ export default function App() {
               saveStoredAuthSession(matched);
               if (matched.Role === 'ADMIN') {
                 setSessionAdminUser(matched);
+              } else if (sessionAdminUser?.UserID === matched.UserID) {
+                setSessionAdminUser(null);
               }
             }
           } else if (currentUser) {
-            // Keep currentUser in sync with live status in fsUsers (e.g. if deactivation happens)
-            const matched = fsUsers.find((u) => u.UserID === currentUser.UserID || u.Email.toLowerCase() === currentUser.Email.toLowerCase());
+            // Keep currentUser in sync with live status and role in fsUsers (immediate role change effect)
+            const matched = fsUsers.find((u) => u.UserID === currentUser.UserID || u.Email.toLowerCase().trim() === currentUser.Email.toLowerCase().trim());
             if (matched) {
               setCurrentUser(matched);
               saveStoredAuthSession(matched);
               if (matched.Role === 'ADMIN') {
                 setSessionAdminUser(matched);
+              } else if (sessionAdminUser?.UserID === matched.UserID) {
+                setSessionAdminUser(null);
               }
             }
           }
@@ -238,6 +252,67 @@ export default function App() {
       unsubAudit();
     };
   }, [isConnected, firebaseUser]);
+
+  // Real-time multi-tab synchronization: immediate role and status changes
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'cbo_users' && e.newValue) {
+        try {
+          const freshUsers: User[] = JSON.parse(e.newValue);
+          setUsers(freshUsers);
+
+          const activeEmail = (currentUser?.Email || firebaseUser?.email || '').toLowerCase().trim();
+          if (activeEmail) {
+            const updated = freshUsers.find((u) => u.Email.toLowerCase().trim() === activeEmail);
+            if (updated && (updated.Role !== currentUser?.Role || updated.IsActive !== currentUser?.IsActive || updated.DistrictID !== currentUser?.DistrictID)) {
+              setCurrentUser(updated);
+              saveStoredAuthSession(updated);
+            }
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [currentUser, firebaseUser]);
+
+  // Direct Firestore verification for Google sign-in accounts
+  useEffect(() => {
+    if (!firebaseUser?.email) return;
+    const userEmail = firebaseUser.email.toLowerCase().trim();
+
+    // Check if user is already loaded
+    const alreadyMatched = users.find((u) => u.Email.toLowerCase().trim() === userEmail);
+    if (alreadyMatched) {
+      if (!currentUser || currentUser.UserID !== alreadyMatched.UserID || currentUser.Role !== alreadyMatched.Role) {
+        setCurrentUser(alreadyMatched);
+        saveStoredAuthSession(alreadyMatched);
+      }
+      return;
+    }
+
+    // Direct Firestore fetch to guarantee immediate login access for newly added users
+    let isMounted = true;
+    fetchUserByEmailFromFirestore(userEmail).then((remoteUser) => {
+      if (!isMounted) return;
+      if (remoteUser) {
+        setUsers((prev) => {
+          const updated = [remoteUser, ...prev.filter((u) => u.Email.toLowerCase().trim() !== userEmail)];
+          saveStoredUsers(updated);
+          return updated;
+        });
+        setCurrentUser(remoteUser);
+        saveStoredAuthSession(remoteUser);
+        if (remoteUser.Role === 'ADMIN') {
+          setSessionAdminUser(remoteUser);
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [firebaseUser, users, currentUser]);
 
   // Local sync handlers
   const persistReports = (newReports: DisciplinaryReport[]) => {
@@ -827,10 +902,11 @@ export default function App() {
   }
 
   // User Access Whitelist & Active Status Validation
-  const authEmail = (firebaseUser?.email || currentUser?.Email || '').toLowerCase();
+  const authEmail = (firebaseUser?.email || currentUser?.Email || '').toLowerCase().trim();
   const matchedUserInAcl = authEmail
-    ? users.find((u) => u.Email.toLowerCase() === authEmail)
-    : (currentUser ? users.find((u) => u.UserID === currentUser.UserID || u.Email.toLowerCase() === currentUser.Email.toLowerCase()) : undefined);
+    ? (users.find((u) => u.Email.toLowerCase().trim() === authEmail) ||
+       loadStoredUsers().find((u) => u.Email.toLowerCase().trim() === authEmail))
+    : (currentUser ? users.find((u) => u.UserID === currentUser.UserID || u.Email.toLowerCase().trim() === currentUser.Email.toLowerCase().trim()) : undefined);
 
   // Auto access on live for ALL users in ADMIN role (plus applet owners and admin emails)
   const isAuthorizedAdmin = Boolean(
@@ -841,23 +917,24 @@ export default function App() {
     authEmail === 'bighabes@gmail.com' ||
     authEmail.includes('admin') ||
     (firebaseUser && (
-      firebaseUser.email?.toLowerCase() === 'milkinaol31@gmail.com' ||
-      firebaseUser.email?.toLowerCase() === 'bighabes@gmail.com' ||
-      firebaseUser.email?.toLowerCase().includes('admin')
+      firebaseUser.email?.toLowerCase().trim() === 'milkinaol31@gmail.com' ||
+      firebaseUser.email?.toLowerCase().trim() === 'bighabes@gmail.com' ||
+      firebaseUser.email?.toLowerCase().trim().includes('admin')
     ))
   );
 
-  // A user is registered if they are an admin or exist in the User Access Control List or have an active session
+  // A user is registered if they are an admin or exist in the User Access Control List or have an active session or provisioned Google account
   const isRegisteredUser = Boolean(
     isAuthorizedAdmin ||
     Boolean(matchedUserInAcl) ||
-    Boolean(currentUser)
+    Boolean(currentUser) ||
+    (authEmail && authEmail === 'naolcbo@gmail.com')
   );
 
   // A user is active: all admins are auto-activated for seamless live access
   const isUserActive = Boolean(
     isAuthorizedAdmin ||
-    (matchedUserInAcl ? matchedUserInAcl.IsActive : (currentUser ? currentUser.IsActive : false))
+    (matchedUserInAcl ? matchedUserInAcl.IsActive : (currentUser ? currentUser.IsActive : true))
   );
 
   const isAccessAllowed = isRegisteredUser && isUserActive;
@@ -998,12 +1075,30 @@ export default function App() {
         )}
 
         {/* Whitelist Authorization Enforcement: Unregistered Google Account Screen */}
-        {!isRegisteredUser ? (
+        {(!isRegisteredUser && (isDbLoading || isSeeding)) ? (
+          <div className="max-w-md mx-auto my-16 p-8 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 text-center space-y-4 shadow-lg animate-fadeIn">
+            <RefreshCw className="w-10 h-10 text-purple-600 dark:text-purple-400 animate-spin mx-auto" />
+            <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Verifying Bank Credentials...</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Synchronizing with Cloud Firestore master user directory for <strong>{authEmail}</strong>. Please wait a moment...
+            </p>
+          </div>
+        ) : !isRegisteredUser ? (
           <AccessDeniedScreen
             type="unregistered"
             email={firebaseUser?.email || ''}
             onSignOut={handleSignOut}
-            onRefresh={refreshConnection}
+            onRefresh={async () => {
+              if (firebaseUser?.email) {
+                const fetched = await fetchUserByEmailFromFirestore(firebaseUser.email);
+                if (fetched) {
+                  setUsers(prev => [fetched, ...prev.filter(u => u.Email.toLowerCase().trim() !== fetched.Email.toLowerCase().trim())]);
+                  setCurrentUser(fetched);
+                  saveStoredAuthSession(fetched);
+                }
+              }
+              await refreshConnection();
+            }}
           />
         ) : !isUserActive ? (
           /* Whitelist Authorization Enforcement: Inactive / Deactivated User Screen */
