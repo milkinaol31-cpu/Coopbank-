@@ -27,7 +27,8 @@ import {
   clearOfflineQueue,
   OfflineQueueItem,
   loadStoredAuthSession,
-  saveStoredAuthSession
+  saveStoredAuthSession,
+  deduplicateUsers
 } from './utils/offlineStorage';
 import { useFirebase } from './context/FirebaseContext';
 import {
@@ -141,20 +142,9 @@ export default function App() {
     const unsubUsers = subscribeUsers(
       (fsUsers) => {
         if (fsUsers.length > 0) {
-          // Merge remote users from Firestore with any local users to ensure no newly created user is wiped
+          // Merge remote users from Firestore with local users, ensuring no duplicates and Firestore taking priority
           setUsers((prevUsers) => {
-            const userMap = new Map<string, User>();
-            // Remote Firestore users take priority
-            fsUsers.forEach((u) => userMap.set(u.Email.toLowerCase(), u));
-            // Keep local users that have not yet synced or are cached
-            prevUsers.forEach((u) => {
-              if (!userMap.has(u.Email.toLowerCase())) {
-                userMap.set(u.Email.toLowerCase(), u);
-                // Also trigger background persistence to Firestore
-                saveUserToFirestore(u, 'system@cbo.com', 'System Sync').catch(() => {});
-              }
-            });
-            const merged = Array.from(userMap.values());
+            const merged = deduplicateUsers([...fsUsers, ...prevUsers]);
             saveStoredUsers(merged);
             return merged;
           });
@@ -326,8 +316,9 @@ export default function App() {
   };
 
   const persistUsers = (newUsers: User[]) => {
-    setUsers(newUsers);
-    saveStoredUsers(newUsers);
+    const deduped = deduplicateUsers(newUsers);
+    setUsers(deduped);
+    saveStoredUsers(deduped);
   };
 
   const persistDistricts = (newDistricts: District[]) => {

@@ -551,11 +551,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     const matchesRole = roleFilter === 'ALL' || u.Role === roleFilter;
                     return matchesSearch && matchesRole;
                   })
-                  .map(u => {
+                  .map((u, idx) => {
                     const dist = districts.find(d => d.DistrictID === u.DistrictID);
 
                     return (
-                      <tr key={u.UserID} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50 transition-colors">
+                      <tr key={`${u.UserID || 'usr'}-${u.Email || 'email'}-${idx}`} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50 transition-colors">
                         <td className="py-3 px-3.5 font-mono font-bold text-slate-900 dark:text-slate-100">{u.UserID}</td>
                         <td className="py-3 px-3.5">
                           <div className="font-semibold text-slate-900 dark:text-slate-100">{u.FullName}</div>

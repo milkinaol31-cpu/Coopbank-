@@ -10,17 +10,36 @@ const STORAGE_KEYS = {
   AUTH_SESSION: 'BANK_HR_ACTIVE_SESSION_V2',
 };
 
+export function deduplicateUsers(userList: User[]): User[] {
+  const byId = new Map<string, User>();
+  const byEmail = new Map<string, User>();
+
+  for (const u of userList) {
+    if (!u || !u.UserID) continue;
+    const emailNorm = (u.Email || '').trim().toLowerCase();
+
+    if (byId.has(u.UserID)) {
+      continue;
+    }
+    if (emailNorm && byEmail.has(emailNorm)) {
+      continue;
+    }
+
+    byId.set(u.UserID, u);
+    if (emailNorm) {
+      byEmail.set(emailNorm, u);
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
 export function loadStoredAuthSession(): User | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && (parsed.Email || parsed.UserID)) {
-        const emailLower = (parsed.Email || '').toLowerCase();
-        if (emailLower === 'naolcbo@gmail.com' || emailLower === 'milkinaol31@gmail.com') {
-          localStorage.removeItem(STORAGE_KEYS.AUTH_SESSION);
-          return null;
-        }
         return parsed;
       }
     }
@@ -82,48 +101,25 @@ export function loadStoredUsers(): User[] {
     if (raw) {
       let parsed: User[] = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // Filter out legacy naolcbo and milkinaol31 emails
-        const filtered = parsed.filter(
-          (u) =>
-            u.Email?.toLowerCase() !== 'naolcbo@gmail.com' &&
-            u.Email?.toLowerCase() !== 'milkinaol31@gmail.com'
-        );
-        let changed = filtered.length !== parsed.length;
-
-        // Ensure current active admin bighabes@gmail.com is present in list
-        if (!filtered.some(u => u.Email?.toLowerCase() === 'bighabes@gmail.com')) {
-          const adminUser = INITIAL_USERS.find(u => u.Email === 'bighabes@gmail.com');
-          if (adminUser) {
-            filtered.unshift(adminUser);
-            changed = true;
-          }
+        const deduped = deduplicateUsers(parsed);
+        if (deduped.length !== parsed.length) {
+          saveStoredUsers(deduped);
         }
-
-        // Ensure generic admin@coopbank.com is present
-        if (!filtered.some(u => u.Email?.toLowerCase() === 'admin@coopbank.com')) {
-          const genAdmin = INITIAL_USERS.find(u => u.Email === 'admin@coopbank.com');
-          if (genAdmin) {
-            filtered.push(genAdmin);
-            changed = true;
-          }
-        }
-
-        if (changed) {
-          saveStoredUsers(filtered);
-        }
-        return filtered;
+        return deduped;
       }
     }
   } catch (e) {
     console.warn('Failed to load users from localStorage', e);
   }
-  saveStoredUsers(INITIAL_USERS);
-  return INITIAL_USERS;
+  const initial = deduplicateUsers(INITIAL_USERS);
+  saveStoredUsers(initial);
+  return initial;
 }
 
 export function saveStoredUsers(users: User[]): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    const deduped = deduplicateUsers(users);
+    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(deduped));
   } catch (e) {
     console.warn('Failed to save users to localStorage', e);
   }

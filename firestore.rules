@@ -12,7 +12,7 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
     }
 
     function isAdmin() {
@@ -28,27 +28,39 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
-      let uId = 'userId' in data ? data.userId : ('UserID' in data ? data.UserID : '');
-      let uEmail = 'email' in data ? data.email : ('Email' in data ? data.Email : '');
-      return uId is string && uId.size() > 0 && uId.size() <= 128 && uEmail is string && uEmail.size() <= 256;
+      return (
+        (('userId' in data && data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128) ||
+         ('UserID' in data && data.UserID is string && data.UserID.size() > 0 && data.UserID.size() <= 128)) &&
+        (('email' in data && data.email is string && data.email.size() <= 256) ||
+         ('Email' in data && data.Email is string && data.Email.size() <= 256))
+      );
     }
 
     function isValidDistrict(data) {
-      let dId = 'districtId' in data ? data.districtId : ('DistrictID' in data ? data.DistrictID : '');
-      let dName = 'districtName' in data ? data.districtName : ('DistrictName' in data ? data.DistrictName : '');
-      return dId is string && dId.size() > 0 && dId.size() <= 64 && dName is string && dName.size() <= 128;
+      return (
+        (('districtId' in data && data.districtId is string && data.districtId.size() > 0 && data.districtId.size() <= 64) ||
+         ('DistrictID' in data && data.DistrictID is string && data.DistrictID.size() > 0 && data.DistrictID.size() <= 64)) &&
+        (('districtName' in data && data.districtName is string && data.districtName.size() <= 128) ||
+         ('DistrictName' in data && data.DistrictName is string && data.DistrictName.size() <= 128))
+      );
     }
 
     function isValidReport(data) {
-      let rId = 'reportId' in data ? data.reportId : ('ReportID' in data ? data.ReportID : '');
-      let empName = 'employeeName' in data ? data.employeeName : ('EmployeeName' in data ? data.EmployeeName : '');
-      return rId is string && rId.size() > 0 && rId.size() <= 64 && empName is string && empName.size() <= 128;
+      return (
+        (('reportId' in data && data.reportId is string && data.reportId.size() > 0 && data.reportId.size() <= 64) ||
+         ('ReportID' in data && data.ReportID is string && data.ReportID.size() > 0 && data.ReportID.size() <= 64)) &&
+        (('employeeName' in data && data.employeeName is string && data.employeeName.size() <= 128) ||
+         ('EmployeeName' in data && data.EmployeeName is string && data.EmployeeName.size() <= 128))
+      );
     }
 
     function isValidAudit(data) {
-      let aId = 'auditId' in data ? data.auditId : ('AuditID' in data ? data.AuditID : '');
-      let act = 'action' in data ? data.action : ('Action' in data ? data.Action : '');
-      return aId is string && aId.size() > 0 && aId.size() <= 64 && act is string && act.size() <= 128;
+      return (
+        (('auditId' in data && data.auditId is string && data.auditId.size() > 0 && data.auditId.size() <= 64) ||
+         ('AuditID' in data && data.AuditID is string && data.AuditID.size() > 0 && data.AuditID.size() <= 64)) &&
+        (('action' in data && data.action is string && data.action.size() > 0 && data.action.size() <= 128) ||
+         ('Action' in data && data.Action is string && data.Action.size() > 0 && data.Action.size() <= 128))
+      );
     }
 
     // Connection health check
@@ -103,7 +115,7 @@ service cloud.firestore {
     // AuditLog Collection - strictly append-only
     match /AuditLog/{auditId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(auditId) && isValidAudit(request.resource.data);
+      allow create: if isValidId(auditId) && isValidAudit(request.resource.data);
       allow update, delete: if false;
     }
   }
