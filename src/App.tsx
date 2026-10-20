@@ -60,6 +60,7 @@ import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { exportReportsToCSV } from './utils/exportUtils';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { AlertCircle, Lock, Shield, Database, CheckCircle, AlertTriangle, X, RefreshCw, LogIn } from 'lucide-react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 
 export default function App() {
   const [systemConfig] = useState<SystemConfig>(INITIAL_CONFIG);
@@ -1442,6 +1443,7 @@ export default function App() {
           </div>
         </div>
       </footer>
+      <SpeedInsights />
     </div>
   );
 }
