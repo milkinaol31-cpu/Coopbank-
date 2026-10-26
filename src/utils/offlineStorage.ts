@@ -11,27 +11,34 @@ const STORAGE_KEYS = {
 };
 
 export function deduplicateUsers(userList: User[]): User[] {
-  const byId = new Map<string, User>();
-  const byEmail = new Map<string, User>();
+  const map = new Map<string, User>();
 
   for (const u of userList) {
     if (!u || !u.UserID) continue;
-    const emailNorm = (u.Email || '').trim().toLowerCase();
+    const emailKey = (u.Email || '').trim().toLowerCase();
+    const primaryKey = emailKey || u.UserID;
 
-    if (byId.has(u.UserID)) {
-      continue;
-    }
-    if (emailNorm && byEmail.has(emailNorm)) {
-      continue;
-    }
-
-    byId.set(u.UserID, u);
-    if (emailNorm) {
-      byEmail.set(emailNorm, u);
+    const existing = map.get(primaryKey) || (emailKey ? map.get(u.UserID) : undefined);
+    if (!existing) {
+      map.set(primaryKey, u);
+      map.set(u.UserID, u);
+    } else {
+      // Retain the version that is newer or has updated role history
+      const existingTime = existing.UpdatedAt ? new Date(existing.UpdatedAt).getTime() : 0;
+      const newTime = u.UpdatedAt ? new Date(u.UpdatedAt).getTime() : 0;
+      if (newTime >= existingTime) {
+        map.set(primaryKey, u);
+        map.set(u.UserID, u);
+      }
     }
   }
 
-  return Array.from(byId.values());
+  // Return unique user objects by UserID
+  const uniqueUsers = new Map<string, User>();
+  for (const user of map.values()) {
+    uniqueUsers.set(user.UserID, user);
+  }
+  return Array.from(uniqueUsers.values());
 }
 
 export function loadStoredAuthSession(): User | null {

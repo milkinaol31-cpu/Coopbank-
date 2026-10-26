@@ -24,6 +24,7 @@ import {
   WifiOff
 } from 'lucide-react';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { getRoleDefinition } from '../rbac/rbacPolicy';
 
 interface ReportFormProps {
   currentUser: User;
@@ -217,7 +218,7 @@ export const ReportForm: React.FC<ReportFormProps> = ({
           Action: isDraft ? 'Draft Saved' : editingReport?.ReportStatus === 'Correction Requested' ? 'Correction Resubmitted' : 'Report Submitted',
           Timestamp: now,
           Actor: `${currentUser.FullName} (${currentUser.Email})`,
-          ActorRole: currentUser.Role === 'DISTRICT_HR' ? 'District HR Officer' : 'HR User',
+          ActorRole: getRoleDefinition(currentUser.Role).name,
           Details: isDraft
             ? 'Report saved as draft'
             : editingReport?.ReportStatus === 'Correction Requested'

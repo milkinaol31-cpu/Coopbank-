@@ -1,4 +1,5 @@
-export type UserRole = 'DISTRICT_HR' | 'HO_MANAGER' | 'ADMIN' | 'AUDITOR' | 'DIRECTOR';
+export * from './rbac/types';
+import { UserRole, RoleChangeRecord, LoginHistoryRecord } from './rbac/types';
 
 export type ReportStatus = 
   | 'Draft' 
@@ -44,14 +45,21 @@ export interface District {
 
 export interface User {
   UserID: string;
-  Email: string;
+  EmployeeID?: string;
   FullName: string;
+  Email: string;
   Role: UserRole;
-  DistrictID: string | null; // null for HO_MANAGER and ADMIN if not bound
+  DistrictID: string | null; // null for HO roles and ADMIN if cross-district
+  Department?: string;
   Position: string;
   IsActive: boolean;
   CreatedAt: string;
+  UpdatedAt?: string;
+  CreatedBy?: string;
+  UpdatedBy?: string;
   LastLogin?: string;
+  RoleHistory?: RoleChangeRecord[];
+  LoginHistory?: LoginHistoryRecord[];
   Password?: string;
   TemporaryPassword?: string;
   MustChangePassword?: boolean;

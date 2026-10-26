@@ -1,5 +1,6 @@
 import React from 'react';
 import { UserRole } from '../types';
+import { canAccessTab, getRoleDefinition, AppTab } from '../rbac/rbacPolicy';
 import {
   LayoutDashboard,
   FilePlus,
@@ -12,20 +13,9 @@ import {
   ShieldAlert,
   Database,
   Lock,
-  WifiOff
 } from 'lucide-react';
 
-export type NavTab =
-  | 'dashboard'
-  | 'submit'
-  | 'my-reports'
-  | 'all-reports'
-  | 'review-queue'
-  | 'reports-download'
-  | 'users'
-  | 'districts'
-  | 'audit-log'
-  | 'offline-sync';
+export type NavTab = AppTab;
 
 interface NavigationProps {
   activeTab: NavTab;
@@ -42,17 +32,12 @@ export const Navigation: React.FC<NavigationProps> = ({
   activeTab,
   onTabChange,
   userRole,
-  isAuthorizedAdmin,
   pendingReviewsCount,
   correctionsCount,
   offlineQueueCount,
   isOnline,
 }) => {
-  const isDistrictHR = userRole === 'DISTRICT_HR';
-  const isDirector = userRole === 'DIRECTOR';
-  const isHOManager = userRole === 'HO_MANAGER';
-  const isAuditor = userRole === 'AUDITOR';
-  const isAdmin = userRole === 'ADMIN' || Boolean(isAuthorizedAdmin);
+  const roleDef = getRoleDefinition(userRole);
 
   interface NavItem {
     id: NavTab;
@@ -64,127 +49,164 @@ export const Navigation: React.FC<NavigationProps> = ({
     restrictedTooltip?: string;
   }
 
+  // Dynamic Dashboard and Reports labels based on role jurisdiction
+  const getDashboardLabel = () => {
+    switch (userRole) {
+      case 'ADMIN':
+        return 'System Admin Console';
+      case 'HO_MANAGER':
+        return 'Head Office Executive Dashboard';
+      case 'HO_HR':
+        return 'HO HR Operations';
+      case 'DISTRICT_MANAGER':
+        return 'District Leadership Dashboard';
+      case 'DISTRICT_HR':
+        return 'District HR Dashboard';
+      case 'BRANCH_MANAGER':
+        return 'Branch Manager Dashboard';
+      case 'EMPLOYEE':
+        return 'Employee Portal';
+      case 'AUDITOR':
+        return 'Compliance Audit Dashboard';
+      case 'DIRECTOR':
+        return 'District Director Dashboard';
+      default:
+        return 'Operational Dashboard';
+    }
+  };
+
+  const getMyReportsLabel = () => {
+    if (userRole === 'EMPLOYEE') return 'My Records & PIPs';
+    if (roleDef.isDistrictBound) return 'My District Reports';
+    if (userRole === 'HO_HR') return 'Head Office Submissions';
+    return 'District Submissions';
+  };
+
   const navItems: NavItem[] = [
     {
       id: 'dashboard',
-      label: (isDistrictHR || isDirector) ? 'District Dashboard' : 'Consolidated Dashboard',
+      label: getDashboardLabel(),
       icon: LayoutDashboard,
-      allowed: true,
+      allowed: canAccessTab(userRole, 'dashboard'),
     },
     {
       id: 'submit',
-      label: 'Submit New Report',
+      label: 'Submit Disciplinary Report',
       icon: FilePlus,
-      allowed: isDistrictHR || isDirector || isAdmin,
-      restrictedTooltip: 'Restricted: Filing reports is reserved for District HR, Directors, and Administrators.',
+      allowed: canAccessTab(userRole, 'submit'),
+      restrictedTooltip: `Filing disciplinary reports is not authorized for ${roleDef.name}.`,
     },
     {
       id: 'my-reports',
-      label: (isDistrictHR || isDirector) ? 'My District Reports' : 'District Submissions',
+      label: getMyReportsLabel(),
       icon: Files,
-      allowed: true,
-      badge: (isDistrictHR || isDirector) && correctionsCount > 0 ? correctionsCount : undefined,
+      allowed: canAccessTab(userRole, 'my-reports'),
+      badge: roleDef.isDistrictBound && correctionsCount > 0 ? correctionsCount : undefined,
       badgeColor: 'bg-amber-500 text-white',
     },
     {
       id: 'all-reports',
       label: 'All 13 Districts Reports',
       icon: FolderGit2,
-      allowed: isHOManager || isAdmin || isAuditor,
-      restrictedTooltip: 'Restricted: District accounts can only access their assigned district.',
+      allowed: canAccessTab(userRole, 'all-reports'),
+      restrictedTooltip: `Cross-district access requires Head Office Oversight, Compliance Auditor, or Administrator authority.`,
     },
     {
       id: 'review-queue',
-      label: 'HO Review Queue',
+      label: 'HO Review & Clearance Queue',
       icon: CheckCircle2,
-      allowed: isHOManager || isAdmin,
+      allowed: canAccessTab(userRole, 'review-queue'),
       badge: pendingReviewsCount > 0 ? pendingReviewsCount : undefined,
       badgeColor: 'bg-blue-600 text-white',
-      restrictedTooltip: 'Restricted to Head Office HR Oversight personnel.',
+      restrictedTooltip: 'Restricted strictly to Head Office HR Oversight and Review personnel.',
     },
     {
       id: 'reports-download',
       label: 'Reports & Downloads',
       icon: DownloadCloud,
-      allowed: true,
+      allowed: canAccessTab(userRole, 'reports-download'),
     },
     {
       id: 'users',
-      label: 'User Management',
+      label: 'User Management & RBAC',
       icon: Users,
-      allowed: isAdmin,
-      restrictedTooltip: 'Restricted to System Administrators.',
+      allowed: canAccessTab(userRole, 'users'),
+      restrictedTooltip: 'User Access Control List and Role Assignments are restricted to System Administrators.',
     },
     {
       id: 'districts',
       label: '13 Districts Registry',
       icon: MapPin,
-      allowed: isAdmin,
-      restrictedTooltip: 'Restricted to System Administrators.',
+      allowed: canAccessTab(userRole, 'districts'),
+      restrictedTooltip: 'District operational directory managed by authorized leadership.',
     },
     {
       id: 'audit-log',
       label: 'System Audit Trail',
       icon: ShieldAlert,
-      allowed: isHOManager || isAdmin || isAuditor,
-      restrictedTooltip: 'Restricted to Head Office, Auditors, and Administrators.',
+      allowed: canAccessTab(userRole, 'audit-log'),
+      restrictedTooltip: 'Immutable audit logs reserved for Head Office, Compliance Auditors, and Administrators.',
     },
     {
       id: 'offline-sync',
-      label: 'Offline & Sync Center',
+      label: 'Offline & Cloud Sync',
       icon: Database,
-      allowed: true,
+      allowed: canAccessTab(userRole, 'offline-sync'),
       badge: !isOnline ? 'OFFLINE' : offlineQueueCount > 0 ? offlineQueueCount : undefined,
       badgeColor: !isOnline ? 'bg-amber-500 text-white' : 'bg-blue-600 text-white',
     },
   ];
 
   return (
-    <nav className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-sm sticky top-[73px] z-30 transition-colors">
+    <nav className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-xs sticky top-[73px] z-30 transition-colors">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex space-x-1 overflow-x-auto py-2 scrollbar-thin">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            const isAccessible = item.allowed;
+        <div className="flex items-center justify-between gap-3 overflow-x-auto py-2 scrollbar-thin">
+          <div className="flex space-x-1 shrink-0">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeTab === item.id;
+              const isAccessible = item.allowed;
 
-            if (!isAccessible) {
-              return (
-                <div
-                  key={item.id}
-                  title={item.restrictedTooltip}
-                  className="flex items-center space-x-1.5 px-3 py-2 text-xs font-medium text-slate-400 dark:text-slate-500 bg-slate-50/70 dark:bg-slate-800/40 rounded-md border border-slate-200/60 dark:border-slate-800/60 cursor-not-allowed opacity-60 select-none shrink-0"
-                >
-                  <Lock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
-                  <span>{item.label}</span>
-                </div>
-              );
-            }
-
-            return (
-              <button
-                key={item.id}
-                onClick={() => onTabChange(item.id)}
-                className={`flex items-center space-x-2 px-3.5 py-2 text-xs font-medium rounded-md whitespace-nowrap transition-colors shrink-0 ${
-                  isActive
-                    ? 'bg-blue-700 text-white shadow-sm font-semibold'
-                    : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-500 dark:text-slate-400'}`} />
-                <span>{item.label}</span>
-                {item.badge !== undefined && (
-                  <span
-                    className={`ml-1.5 px-1.5 py-0.5 text-[10px] font-bold rounded-full ${
-                      item.badgeColor || 'bg-slate-200 text-slate-800'
-                    }`}
+              if (!isAccessible) {
+                return (
+                  <div
+                    key={item.id}
+                    title={item.restrictedTooltip || 'Restricted by RBAC security policy.'}
+                    className="flex items-center space-x-2 px-3 py-2 rounded-lg text-xs font-medium text-slate-300 dark:text-slate-600 cursor-not-allowed select-none bg-slate-50/50 dark:bg-slate-900/50 border border-transparent"
                   >
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+                    <Icon className="w-4 h-4 shrink-0 opacity-40" />
+                    <span>{item.label}</span>
+                    <Lock className="w-3 h-3 ml-0.5 text-slate-300 dark:text-slate-600 shrink-0" />
+                  </div>
+                );
+              }
+
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => onTabChange(item.id)}
+                  className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all shrink-0 relative ${
+                    isActive
+                      ? 'bg-blue-700 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-500 dark:text-slate-400'}`} />
+                  <span>{item.label}</span>
+
+                  {item.badge !== undefined && (
+                    <span
+                      className={`ml-1.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                        item.badgeColor || 'bg-slate-200 text-slate-800'
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </nav>

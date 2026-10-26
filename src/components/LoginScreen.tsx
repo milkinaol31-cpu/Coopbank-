@@ -17,7 +17,7 @@ import {
   UserCheck,
   ShieldAlert
 } from 'lucide-react';
-import { User } from '../types';
+import { User, LoginHistoryRecord } from '../types';
 import { loadStoredUsers } from '../utils/offlineStorage';
 import { fetchUserByEmailFromFirestore } from '../services/firebaseDb';
 
@@ -78,20 +78,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     setIsSubmitting(true);
 
     try {
-      // 1. Registered Account Check across active state and stored directory
-      let matchedUser = allUsers.find((u) => u.Email.toLowerCase().trim() === cleanEmail) ||
-        loadStoredUsers().find((u) => u.Email.toLowerCase().trim() === cleanEmail);
-
-      // If not in local cache, query Firestore master collection directly
-      if (!matchedUser) {
-        try {
-          const remoteUser = await fetchUserByEmailFromFirestore(cleanEmail);
-          if (remoteUser) {
-            matchedUser = remoteUser;
-          }
-        } catch {
-          // fallback
+      // 1. Fetch fresh user document directly from Cloud Firestore first to guarantee zero stale role caching
+      let matchedUser: User | null = null;
+      try {
+        const remoteUser = await fetchUserByEmailFromFirestore(cleanEmail);
+        if (remoteUser) {
+          matchedUser = remoteUser;
         }
+      } catch {
+        // network or offline fallback
+      }
+
+      // If offline or not yet in Firestore, check memory state and local cache
+      if (!matchedUser) {
+        matchedUser = allUsers.find((u) => u.Email.toLowerCase().trim() === cleanEmail) ||
+          loadStoredUsers().find((u) => u.Email.toLowerCase().trim() === cleanEmail) || null;
       }
 
       // Auto-permit Lead Administrators or naolcbo@gmail.com even if initial sync is pending
@@ -156,8 +157,22 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         Boolean(matchedUser.MustChangePassword) ||
         matchedUser.Password === 'CoopBank@2026';
 
+      const now = new Date().toISOString();
+      const loginRecord: LoginHistoryRecord = {
+        id: `LH-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        userId: matchedUser.UserID,
+        email: matchedUser.Email,
+        timestamp: now,
+        authMethod: 'PASSWORD',
+        status: 'SUCCESS',
+        roleAtLogin: matchedUser.Role,
+        districtId: matchedUser.DistrictID,
+      };
+
       const userToLogin: User = {
         ...matchedUser,
+        LastLogin: now,
+        LoginHistory: [loginRecord, ...(matchedUser.LoginHistory || [])],
         MustChangePassword: isDefaultOrAdminGenerated,
       };
 

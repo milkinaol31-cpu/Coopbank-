@@ -44,10 +44,18 @@ import {
 } from './services/firebaseDb';
 import { Header } from './components/Header';
 import { Navigation, NavTab } from './components/Navigation';
+import { DynamicDashboard } from './components/DynamicDashboard';
 import { DistrictDashboard } from './components/DistrictDashboard';
 import { ManagerDashboard } from './components/ManagerDashboard';
 import { ReportForm } from './components/ReportForm';
 import { ReportList } from './components/ReportList';
+import {
+  getRoleDefinition,
+  hasPermission,
+  canAccessTab,
+  canPerformAction,
+  getAllowedTabsForRole
+} from './rbac/rbacPolicy';
 import { ReportDetailModal } from './components/ReportDetailModal';
 import { OfficialPrintDocument } from './components/OfficialPrintDocument';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -91,6 +99,9 @@ export default function App() {
     const current = loadStoredAuthSession();
     return current?.Role === 'ADMIN' ? current : null;
   });
+
+  // Active testing persona selected by Admin (isolated from root credentials)
+  const [sessionPersonaUser, setSessionPersonaUser] = useState<User | null>(null);
 
   // Active Navigation Tab
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
@@ -246,9 +257,9 @@ export default function App() {
   // Real-time multi-tab synchronization: immediate role and status changes
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'cbo_users' && e.newValue) {
+      if ((e.key === 'BANK_HR_USERS_V1' || e.key === 'cbo_users' || e.key === 'cbo_last_role_update') && e.newValue) {
         try {
-          const freshUsers: User[] = JSON.parse(e.newValue);
+          const freshUsers: User[] = loadStoredUsers();
           setUsers(freshUsers);
 
           const activeEmail = (currentUser?.Email || firebaseUser?.email || '').toLowerCase().trim();
@@ -262,8 +273,24 @@ export default function App() {
         } catch {}
       }
     };
+
+    const handleCustomRoleUpdate = (e: any) => {
+      const updatedUser: User = e.detail;
+      if (!updatedUser) return;
+      setUsers((prev) => prev.map((u) => (u.UserID === updatedUser.UserID ? updatedUser : u)));
+      const activeEmail = (currentUser?.Email || firebaseUser?.email || '').toLowerCase().trim();
+      if (activeEmail && updatedUser.Email.toLowerCase().trim() === activeEmail) {
+        setCurrentUser(updatedUser);
+        saveStoredAuthSession(updatedUser);
+      }
+    };
+
     window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    window.addEventListener('cbo_user_role_updated', handleCustomRoleUpdate);
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('cbo_user_role_updated', handleCustomRoleUpdate);
+    };
   }, [currentUser, firebaseUser]);
 
   // Direct Firestore verification for Google sign-in accounts
@@ -426,10 +453,12 @@ export default function App() {
     };
     persistAuditLogs([loginAudit, ...auditLogs]);
 
+    const roleDef = getRoleDefinition(user.Role);
     const distName = districts.find(d => d.DistrictID === user.DistrictID)?.DistrictName;
+    const jurisdiction = roleDef.isDistrictBound ? (distName ? `${distName} District` : 'Assigned District') : 'Bank-Wide Cross-District Authority';
     setNotification({
       type: 'success',
-      message: `Welcome, ${user.FullName}. Authenticated for ${user.Role === 'DISTRICT_HR' ? (distName || 'District HR') : user.Role === 'ADMIN' ? 'Enterprise Administration' : 'Head Office HR Oversight'}.`,
+      message: `Welcome, ${user.FullName}. Authenticated as ${roleDef.name} (${jurisdiction}).`,
     });
   };
 
@@ -534,12 +563,10 @@ export default function App() {
       setSessionAdminUser(currentUser);
     }
 
+    setSessionPersonaUser(user);
     setCurrentUser(user);
     saveStoredAuthSession(user);
     setForcedDistrictFilter(undefined);
-    if (user.Role === 'DISTRICT_HR' && ['all-reports', 'review-queue'].includes(activeTab)) {
-      setActiveTab('dashboard');
-    }
   };
 
   // Report creation / edit handler with Firestore integration
@@ -791,7 +818,7 @@ export default function App() {
     };
     persistAuditLogs([newAudit, ...auditLogs]);
 
-    const roleName = newUser.Role === 'ADMIN' ? 'System Administrator' : newUser.Role === 'HO_MANAGER' ? 'Head Office Manager' : 'District HR Officer';
+    const roleName = getRoleDefinition(newUser.Role).name;
     setNotification({
       type: 'success',
       message: `User ${newUser.FullName} (${newUser.Email}) successfully provisioned as ${roleName}. They can now log in immediately.`,
@@ -804,11 +831,19 @@ export default function App() {
     const updatedUsersList = users.map((u) => (u.UserID === updatedUser.UserID || u.Email.toLowerCase() === updatedUser.Email.toLowerCase() ? updatedUser : u));
     persistUsers(updatedUsersList);
 
-    // If updating the active user session, immediately sync currentUser state
+    // If updating the active user session or testing persona, immediately sync state
     if (currentUser && (currentUser.UserID === updatedUser.UserID || currentUser.Email?.toLowerCase() === updatedUser.Email?.toLowerCase())) {
       setCurrentUser(updatedUser);
       saveStoredAuthSession(updatedUser);
     }
+    if (sessionPersonaUser && (sessionPersonaUser.UserID === updatedUser.UserID || sessionPersonaUser.Email?.toLowerCase() === updatedUser.Email?.toLowerCase())) {
+      setSessionPersonaUser(updatedUser);
+    }
+
+    try {
+      window.dispatchEvent(new CustomEvent('cbo_user_role_updated', { detail: updatedUser }));
+      localStorage.setItem('cbo_last_role_update', JSON.stringify({ userId: updatedUser.UserID, role: updatedUser.Role, timestamp: Date.now() }));
+    } catch {}
 
     try {
       await saveUserToFirestore(updatedUser, userEmail, userName);
@@ -930,20 +965,38 @@ export default function App() {
 
   const isAccessAllowed = isRegisteredUser && isUserActive;
 
-  const activeUser: User = currentUser || (matchedUserInAcl ? {
-    ...matchedUserInAcl,
-    IsActive: isAuthorizedAdmin ? true : matchedUserInAcl.IsActive,
-    Role: matchedUserInAcl.Role,
-  } : {
-    UserID: `USR-${firebaseUser?.uid.slice(0, 8) || 'STAFF'}`,
-    Email: authEmail,
-    FullName: firebaseUser?.displayName || (isAuthorizedAdmin ? 'Enterprise Administrator' : 'Bank Staff'),
-    Role: isAuthorizedAdmin ? 'ADMIN' : 'DISTRICT_HR',
-    DistrictID: isAuthorizedAdmin ? null : 'DIST-01',
-    Position: isAuthorizedAdmin ? 'Lead HR Enterprise Administrator' : 'Staff',
-    IsActive: true,
-    CreatedAt: new Date().toISOString(),
-  });
+  // Single Source of Truth: live matched record in ACL takes precedence over stale session cache
+  const activeUser: User = sessionPersonaUser && isAuthorizedAdmin
+    ? (users.find(u => u.UserID === sessionPersonaUser.UserID) || sessionPersonaUser)
+    : (matchedUserInAcl ? {
+        ...matchedUserInAcl,
+        IsActive: isAuthorizedAdmin ? true : matchedUserInAcl.IsActive,
+      } : (currentUser || {
+        UserID: `USR-${firebaseUser?.uid.slice(0, 8) || 'STAFF'}`,
+        Email: authEmail,
+        FullName: firebaseUser?.displayName || (isAuthorizedAdmin ? 'Enterprise Administrator' : 'Bank Staff'),
+        Role: isAuthorizedAdmin ? 'ADMIN' : 'DISTRICT_HR',
+        DistrictID: isAuthorizedAdmin ? null : 'DIST-01',
+        Position: isAuthorizedAdmin ? 'Lead HR Enterprise Administrator' : 'Staff',
+        IsActive: true,
+        CreatedAt: new Date().toISOString(),
+      }));
+
+  // Automatic Tab Redirection on Role / Permission Change:
+  // If the user's role is updated such that their current tab is not allowed,
+  // gracefully redirect them to their role's authorized default tab.
+  useEffect(() => {
+    if (!activeUser) return;
+    const allowed = getAllowedTabsForRole(activeUser.Role);
+    if (!allowed.includes(activeTab)) {
+      const def = getRoleDefinition(activeUser.Role);
+      setActiveTab(def.defaultTab || 'dashboard');
+      setNotification({
+        type: 'info',
+        message: `Your account role is updated to "${def.name}". Navigation refreshed to your authorized workspace.`,
+      });
+    }
+  }, [activeUser.Role, activeTab]);
 
   // Mandatory password change check: prompt user who signed in with admin-generated login (e.g. Coopbank@2026 or MustChangePassword flag)
   const isPasswordChangeRequired = Boolean(
@@ -1114,48 +1167,58 @@ export default function App() {
           <>
             {/* Tab: Dashboard */}
             {activeTab === 'dashboard' && (
-              activeUser.Role === 'DISTRICT_HR' ? (
-                <DistrictDashboard
-                  currentUser={activeUser}
-                  currentDistrict={currentDistrict}
-                  reports={reports}
-                  onSelectReport={(r) => setDetailModalReport(r)}
-                  onOpenNewReport={() => {
-                    setEditingReport(null);
-                    setActiveTab('submit');
-                  }}
-                  onEditReport={(r) => {
-                    setEditingReport(r);
-                    setActiveTab('submit');
-                  }}
-                />
-              ) : (
-                <ManagerDashboard
-                  districts={districts}
-                  reports={reports}
-                  onSelectReport={(r) => setDetailModalReport(r)}
-                  onFilterByDistrict={(dId) => {
-                    setForcedDistrictFilter(dId);
-                    setActiveTab('all-reports');
-                  }}
-                  onExportCSV={() => exportReportsToCSV(reports.filter(r => r.ReportStatus !== 'Draft'), districts, 'National_Disciplinary_Reports_All13')}
-                  onNavigateToReviewQueue={() => setActiveTab('review-queue')}
-                />
-              )
+              <DynamicDashboard
+                currentUser={activeUser}
+                currentDistrict={currentDistrict}
+                districts={districts}
+                reports={reports}
+                allUsers={users}
+                onSelectReport={(r) => setDetailModalReport(r)}
+                onOpenNewReport={() => {
+                  setEditingReport(null);
+                  setActiveTab('submit');
+                }}
+                onEditReport={(r) => {
+                  setEditingReport(r);
+                  setActiveTab('submit');
+                }}
+                onFilterByDistrict={(dId) => {
+                  setForcedDistrictFilter(dId);
+                  setActiveTab('all-reports');
+                }}
+                onExportCSV={() =>
+                  exportReportsToCSV(
+                    reports.filter((r) => r.ReportStatus !== 'Draft'),
+                    districts,
+                    'National_Disciplinary_Reports_All13'
+                  )
+                }
+                onNavigateToTab={(tab) => setActiveTab(tab)}
+              />
             )}
 
             {/* Tab: Submit New Report (or Edit) */}
             {activeTab === 'submit' && (
-              <ReportForm
-                currentUser={activeUser}
-                districts={districts}
-                editingReport={editingReport}
-                onSubmit={handleSubmitReport}
-                onCancel={() => {
-                  setEditingReport(null);
-                  setActiveTab('dashboard');
-                }}
-              />
+              !canPerformAction(activeUser.Role, 'create', 'reports') ? (
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-red-200 dark:border-red-900/60 p-8 text-center max-w-md mx-auto space-y-3 shadow-sm">
+                  <Shield className="w-12 h-12 text-red-500 mx-auto" />
+                  <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Operation</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    Initiating and filing official disciplinary incident reports is restricted for role "{getRoleDefinition(activeUser.Role).name}".
+                  </p>
+                </div>
+              ) : (
+                <ReportForm
+                  currentUser={activeUser}
+                  districts={districts}
+                  editingReport={editingReport}
+                  onSubmit={handleSubmitReport}
+                  onCancel={() => {
+                    setEditingReport(null);
+                    setActiveTab('dashboard');
+                  }}
+                />
+              )
             )}
 
             {/* Tab: My District Reports */}
@@ -1170,19 +1233,29 @@ export default function App() {
                   setActiveTab('submit');
                 }}
                 onPrintReport={(r) => setPrintDocumentReport(r)}
-                title={activeUser.Role === 'DISTRICT_HR' ? `${currentDistrict?.DistrictName || 'My District'} Reports` : 'District Disciplinary Submissions'}
-                forcedDistrictId={activeUser.Role === 'DISTRICT_HR' ? activeUser.DistrictID || undefined : undefined}
+                title={
+                  activeUser.Role === 'EMPLOYEE'
+                    ? 'My Personnel Disciplinary Records & PIPs'
+                    : getRoleDefinition(activeUser.Role).isDistrictBound
+                    ? `${currentDistrict?.DistrictName || 'My District'} Reports`
+                    : 'District Disciplinary Submissions'
+                }
+                forcedDistrictId={
+                  getRoleDefinition(activeUser.Role).isDistrictBound
+                    ? activeUser.DistrictID || undefined
+                    : undefined
+                }
               />
             )}
 
-            {/* Tab: All 13 Districts Reports (HO Manager and Admin only) */}
+            {/* Tab: All 13 Districts Reports (Requires cross-district permission) */}
             {activeTab === 'all-reports' && (
-              activeUser.Role === 'DISTRICT_HR' ? (
-                <div className="bg-white rounded-xl border border-red-200 p-8 text-center max-w-md mx-auto space-y-3">
+              !hasPermission(activeUser.Role, 'reports.view_all_districts') ? (
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-red-200 dark:border-red-900/60 p-8 text-center max-w-md mx-auto space-y-3 shadow-sm">
                   <Shield className="w-12 h-12 text-red-500 mx-auto" />
-                  <h3 className="font-bold text-slate-900 text-base">Restricted Area</h3>
-                  <p className="text-xs text-slate-600">
-                    District HR Officers are strictly restricted from viewing records belonging to other districts.
+                  <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Area</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    Cross-district report inspection is restricted to Head Office Oversight, Compliance Auditors, and System Administrators.
                   </p>
                 </div>
               ) : (
@@ -1202,54 +1275,65 @@ export default function App() {
               )
             )}
 
-            {/* Tab: Review Queue (HO Manager and Admin only) */}
+            {/* Tab: Review Queue (Authorized Reviewers only) */}
             {activeTab === 'review-queue' && (
-              <div className="space-y-4">
-                <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-                  <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                    <Shield className="w-5 h-5 text-blue-700" />
-                    Head Office HR Supervisory Review Queue
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Filings submitted by District Directors awaiting compliance verification or returned for district amendments.
+              !hasPermission(activeUser.Role, 'reports.review') ? (
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-red-200 dark:border-red-900/60 p-8 text-center max-w-md mx-auto space-y-3 shadow-sm">
+                  <Shield className="w-12 h-12 text-red-500 mx-auto" />
+                  <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Area</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    The supervisory review queue is reserved for Head Office HR Reviewers and System Administrators.
                   </p>
                 </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                      <Shield className="w-5 h-5 text-blue-700 dark:text-blue-400" />
+                      Head Office HR Supervisory Review Queue
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      Filings submitted by District Directors awaiting compliance verification or returned for district amendments.
+                    </p>
+                  </div>
 
-                <ReportList
-                  currentUser={activeUser}
-                  reports={reports.filter(r => r.ReportStatus === 'Submitted' || r.ReportStatus === 'Under Review' || r.ReportStatus === 'Correction Requested')}
-                  districts={districts}
-                  onSelectReport={(r) => setDetailModalReport(r)}
-                  onEditReport={(r) => {
-                    setEditingReport(r);
-                    setActiveTab('submit');
-                  }}
-                  onPrintReport={(r) => setPrintDocumentReport(r)}
-                  title="Submissions Awaiting Action"
-                />
-              </div>
+                  <ReportList
+                    currentUser={activeUser}
+                    reports={reports.filter(r => r.ReportStatus === 'Submitted' || r.ReportStatus === 'Under Review' || r.ReportStatus === 'Correction Requested')}
+                    districts={districts}
+                    onSelectReport={(r) => setDetailModalReport(r)}
+                    onEditReport={(r) => {
+                      setEditingReport(r);
+                      setActiveTab('submit');
+                    }}
+                    onPrintReport={(r) => setPrintDocumentReport(r)}
+                    title="Submissions Awaiting Action"
+                  />
+                </div>
+              )
             )}
 
             {/* Tab: Reports & Downloads */}
             {activeTab === 'reports-download' && (
               <div className="space-y-6">
-                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-                  <h2 className="text-lg font-bold text-slate-900">Reports, Exports & Documentation Hub</h2>
-                  <p className="text-xs text-slate-500 mt-1">
+                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Reports, Exports & Documentation Hub</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                     Download authorized disciplinary records into Excel-compatible CSV format, or generate official printable documents.
                   </p>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-                      <span className="font-bold text-slate-900 block text-sm">Download Filtered Submissions (CSV)</span>
-                      <p className="text-xs text-slate-600">
-                        {activeUser.Role === 'DISTRICT_HR'
-                          ? `Exports all authorized filings for ${currentDistrict?.DistrictName} formatted for Excel and HR audit analysis.`
+                    <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 space-y-2">
+                      <span className="font-bold text-slate-900 dark:text-slate-100 block text-sm">Download Filtered Submissions (CSV)</span>
+                      <p className="text-xs text-slate-600 dark:text-slate-400">
+                        {getRoleDefinition(activeUser.Role).isDistrictBound
+                          ? `Exports all authorized filings for ${currentDistrict?.DistrictName || 'District'} formatted for Excel and HR audit analysis.`
                           : 'Exports all submissions across all 13 bank districts including employee IDs, sanction types, and review outcomes.'}
                       </p>
                       <button
                         onClick={() => {
-                          const exportSet = activeUser.Role === 'DISTRICT_HR'
+                          const isBound = getRoleDefinition(activeUser.Role).isDistrictBound;
+                          const exportSet = isBound
                             ? reports.filter(r => r.DistrictID === activeUser.DistrictID)
                             : reports.filter(r => r.ReportStatus !== 'Draft');
                           exportReportsToCSV(exportSet, districts, 'Bank_HR_Disciplinary_Export');
@@ -1260,12 +1344,12 @@ export default function App() {
                       </button>
                     </div>
 
-                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-                      <span className="font-bold text-slate-900 block text-sm">Official Bank PDF Templates</span>
-                      <p className="text-xs text-slate-600">
+                    <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 space-y-2">
+                      <span className="font-bold text-slate-900 dark:text-slate-100 block text-sm">Official Bank PDF Templates</span>
+                      <p className="text-xs text-slate-600 dark:text-slate-400">
                         Generate official COOPERATIVE BANK OF OROMIA Disciplinary Report documents with formal letterhead and signature blocks.
                       </p>
-                      <p className="text-[11px] text-slate-500">
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
                         To generate an individual report PDF, locate the report in the registry table and click the print icon.
                       </p>
                     </div>
@@ -1290,7 +1374,7 @@ export default function App() {
 
             {/* Tab: User Management (Admin only) */}
             {activeTab === 'users' && (
-              activeUser.Role === 'ADMIN' || isAuthorizedAdmin ? (
+              hasPermission(activeUser.Role, 'users.manage') || isAuthorizedAdmin ? (
                 <AdminDashboard
                   users={users}
                   districts={districts}
@@ -1312,7 +1396,7 @@ export default function App() {
 
             {/* Tab: District Registry (Admin only) */}
             {activeTab === 'districts' && (
-              activeUser.Role === 'ADMIN' || isAuthorizedAdmin ? (
+              canAccessTab(activeUser.Role, 'districts') || isAuthorizedAdmin ? (
                 <AdminDashboard
                   users={users}
                   districts={districts}
@@ -1326,20 +1410,20 @@ export default function App() {
                   <Shield className="w-12 h-12 text-red-500 mx-auto" />
                   <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Area</h3>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    District configuration and metadata settings are restricted to System Administrators.
+                    District configuration and metadata settings are restricted to authorized leadership.
                   </p>
                 </div>
               )
             )}
 
-            {/* Tab: System Audit Trail (HO Manager and Admin only) */}
+            {/* Tab: System Audit Trail (Requires audit.view permission) */}
             {activeTab === 'audit-log' && (
-              activeUser.Role === 'DISTRICT_HR' ? (
+              !hasPermission(activeUser.Role, 'audit.view') && !isAuthorizedAdmin ? (
                 <div className="bg-white dark:bg-slate-900 rounded-xl border border-red-200 dark:border-red-900/60 p-8 text-center max-w-md mx-auto space-y-3 shadow-sm">
                   <Shield className="w-12 h-12 text-red-500 mx-auto" />
                   <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Area</h3>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    Immutable enterprise audit logs can only be audited by Head Office HR Managers and System Administrators.
+                    Immutable enterprise audit logs can only be audited by Head Office HR Managers, Compliance Auditors, and System Administrators.
                   </p>
                 </div>
               ) : (

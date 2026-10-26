@@ -15,6 +15,7 @@ import {
   Calendar
 } from 'lucide-react';
 import { exportReportsToCSV } from '../utils/exportUtils';
+import { getRoleDefinition, hasPermission, canPerformAction } from '../rbac/rbacPolicy';
 
 interface ReportListProps {
   currentUser: User;
@@ -37,24 +38,33 @@ export const ReportList: React.FC<ReportListProps> = ({
   title = 'Disciplinary Action Reports Registry',
   forcedDistrictId,
 }) => {
-  const isDistrictHR = currentUser.Role === 'DISTRICT_HR';
+  const roleDef = getRoleDefinition(currentUser.Role);
+  const isDistrictBound = roleDef.isDistrictBound && !hasPermission(currentUser.Role, 'reports.view_all_districts');
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDistrict, setSelectedDistrict] = useState<string>(
-    forcedDistrictId || (isDistrictHR ? currentUser.DistrictID || 'ALL' : 'ALL')
+    forcedDistrictId || (isDistrictBound ? currentUser.DistrictID || 'ALL' : 'ALL')
   );
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [selectedActionType, setSelectedActionType] = useState<string>('ALL');
   const [selectedPeriod, setSelectedPeriod] = useState<string>('ALL');
 
-  // Strict role isolation: District HR users CANNOT see other districts' reports
+  // Strict role isolation: District-bound users only see their district; Employees only see their own records
   const accessibleReports = useMemo(() => {
-    if (isDistrictHR) {
-      return reports.filter(r => r.DistrictID === currentUser.DistrictID);
+    if (currentUser.Role === 'EMPLOYEE') {
+      return reports.filter(
+        (r) =>
+          (currentUser.EmployeeID && r.EmployeeID === currentUser.EmployeeID) ||
+          r.SubmittedBy?.toLowerCase() === currentUser.Email.toLowerCase() ||
+          r.EmployeeName?.toLowerCase().includes(currentUser.FullName.toLowerCase())
+      );
+    }
+    if (isDistrictBound) {
+      return reports.filter((r) => r.DistrictID === currentUser.DistrictID);
     }
     return reports;
-  }, [reports, isDistrictHR, currentUser.DistrictID]);
+  }, [reports, isDistrictBound, currentUser]);
 
   // Apply filters
   const filteredReports = useMemo(() => {
@@ -73,7 +83,7 @@ export const ReportList: React.FC<ReportListProps> = ({
       }
 
       // District filter (for HO Manager / Admin)
-      if (!isDistrictHR && selectedDistrict !== 'ALL') {
+      if (!isDistrictBound && selectedDistrict !== 'ALL') {
         if (report.DistrictID !== selectedDistrict) return false;
       }
 
@@ -94,7 +104,7 @@ export const ReportList: React.FC<ReportListProps> = ({
 
       return true;
     });
-  }, [accessibleReports, searchQuery, selectedDistrict, selectedStatus, selectedActionType, selectedPeriod, isDistrictHR]);
+  }, [accessibleReports, searchQuery, selectedDistrict, selectedStatus, selectedActionType, selectedPeriod, isDistrictBound]);
 
   const handleExportFiltered = () => {
     exportReportsToCSV(filteredReports, districts, `Disciplinary_Reports_Export_${selectedDistrict}`);
@@ -135,7 +145,7 @@ export const ReportList: React.FC<ReportListProps> = ({
               </span>
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              {isDistrictHR
+              {isDistrictBound
                 ? `Restricted to assigned district records only: ${districtMap.get(currentUser.DistrictID || '')?.DistrictName || currentUser.DistrictID}`
                 : 'Consolidated cross-district repository across all 13 bank districts'}
             </p>
@@ -153,8 +163,8 @@ export const ReportList: React.FC<ReportListProps> = ({
           </div>
         </div>
 
-        {/* Security Indicator for District HR */}
-        {isDistrictHR && (
+        {/* Security Indicator for District-bound roles */}
+        {isDistrictBound && (
           <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/80 rounded-lg p-2.5 text-xs text-emerald-800 dark:text-emerald-300 flex items-center space-x-2">
             <Lock className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <span>
@@ -179,10 +189,10 @@ export const ReportList: React.FC<ReportListProps> = ({
             />
           </div>
 
-          {/* District selector (only enabled for HO Manager & Admin) */}
+          {/* District selector (only enabled for non-district-bound roles) */}
           <div>
             <label htmlFor="filter-district-select" className="sr-only">Filter District</label>
-            {isDistrictHR ? (
+            {isDistrictBound ? (
               <div className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-600 dark:text-slate-300 flex items-center justify-between">
                 <span className="truncate">{districtMap.get(currentUser.DistrictID || '')?.DistrictName}</span>
                 <Lock className="w-3 h-3 text-slate-400 shrink-0 ml-1" />
@@ -277,7 +287,7 @@ export const ReportList: React.FC<ReportListProps> = ({
             <button
               onClick={() => {
                 setSearchQuery('');
-                setSelectedDistrict(isDistrictHR ? currentUser.DistrictID || 'ALL' : 'ALL');
+                setSelectedDistrict(isDistrictBound ? currentUser.DistrictID || 'ALL' : 'ALL');
                 setSelectedStatus('ALL');
                 setSelectedActionType('ALL');
                 setSelectedPeriod('ALL');
@@ -395,8 +405,9 @@ export const ReportList: React.FC<ReportListProps> = ({
                             <Printer className="w-4 h-4" />
                           </button>
 
-                          {/* Edit / Resubmit button if Draft or Correction Requested */}
-                          {(report.ReportStatus === 'Draft' || report.ReportStatus === 'Correction Requested') && (
+                          {/* Edit / Resubmit button if Draft or Correction Requested and user has permission */}
+                          {canPerformAction(currentUser.Role, 'edit', 'reports') &&
+                            (report.ReportStatus === 'Draft' || report.ReportStatus === 'Correction Requested') && (
                             <button
                               onClick={() => onEditReport(report)}
                               title="Edit / Resubmit Report"

@@ -1,6 +1,19 @@
 import React from 'react';
-import { User, District } from '../types';
-import { ShieldCheck, Building2, UserCheck, Lock, AlertCircle, Wifi, WifiOff, Database, LogIn, LogOut, HelpCircle } from 'lucide-react';
+import { User, District, UserRole } from '../types';
+import { getRoleDefinition, ALL_ROLES } from '../rbac/rbacPolicy';
+import {
+  ShieldCheck,
+  Building2,
+  UserCheck,
+  Lock,
+  Wifi,
+  WifiOff,
+  Database,
+  LogIn,
+  LogOut,
+  HelpCircle,
+  Briefcase
+} from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ThemeToggle } from './ThemeToggle';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
@@ -31,12 +44,12 @@ export const Header: React.FC<HeaderProps> = ({
   canSwitchUser,
   onSignOut,
 }) => {
-  const currentDistrict = districts.find(d => d.DistrictID === currentUser.DistrictID);
-  const { isOnline, isSimulated } = useOnlineStatus();
-  const { firebaseUser, authLoading, isConnected, signInWithGoogle, signOut, dbError } = useFirebase();
+  const currentDistrict = districts.find((d) => d.DistrictID === currentUser.DistrictID);
+  const { isOnline } = useOnlineStatus();
+  const { firebaseUser, authLoading, isConnected, signInWithGoogle, signOut } = useFirebase();
 
-  // The persona switcher dropdown is STRICTLY EXCLUSIVE to the Enterprise Administrator.
-  // Once a user is assigned a role (District HR, Head Office Manager), they CANNOT switch roles or use a proxy switcher.
+  const roleDef = getRoleDefinition(currentUser.Role);
+
   const isAuthorizedAdmin = Boolean(
     currentUser?.Role === 'ADMIN' ||
     (firebaseUser && (
@@ -46,23 +59,6 @@ export const Header: React.FC<HeaderProps> = ({
     )) ||
     canSwitchUser
   );
-
-  const getRoleBadge = (role: string) => {
-    switch (role) {
-      case 'ADMIN':
-        return <span className="px-2.5 py-1 text-xs font-semibold rounded-md bg-purple-100 text-purple-800 border border-purple-200">System Administrator</span>;
-      case 'HO_MANAGER':
-        return <span className="px-2.5 py-1 text-xs font-semibold rounded-md bg-blue-100 text-blue-800 border border-blue-200">Head Office HR Manager</span>;
-      case 'DISTRICT_HR':
-        return <span className="px-2.5 py-1 text-xs font-semibold rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200">District HR Officer</span>;
-      case 'AUDITOR':
-        return <span className="px-2.5 py-1 text-xs font-semibold rounded-md bg-indigo-100 text-indigo-800 border border-indigo-200">Compliance Auditor</span>;
-      case 'DIRECTOR':
-        return <span className="px-2.5 py-1 text-xs font-semibold rounded-md bg-amber-100 text-amber-800 border border-amber-200">District Director</span>;
-      default:
-        return null;
-    }
-  };
 
   return (
     <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-40 shadow-md">
@@ -167,10 +163,22 @@ export const Header: React.FC<HeaderProps> = ({
               <span>{authLoading ? 'Connecting...' : 'Sign in with Google'}</span>
             </button>
           )}
+
+          {/* Account Log Out */}
+          {onSignOut && (
+            <button
+              onClick={onSignOut}
+              className="flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-red-950/60 hover:bg-red-900 border border-red-800 text-red-200 transition"
+              title="Sign Out of Current Session"
+            >
+              <LogOut className="w-3 h-3" />
+              <span className="hidden sm:inline">Logout</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Main branding & persona switcher bar */}
+      {/* Main branding & user identity bar */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-4">
         {/* Logo and system title */}
         <div className="flex items-center space-x-3">
@@ -190,39 +198,34 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Current Active User Profile (Strictly Read-Only for District HR & HO Managers) */}
+        {/* Current Active User Profile */}
         <div className="flex items-center space-x-3 bg-slate-800/90 p-2 px-3 rounded-xl border border-slate-700 shadow-sm">
           <div className="text-right">
             <div className="flex items-center justify-end space-x-2">
               <span className="text-sm font-semibold text-slate-100">{currentUser.FullName}</span>
-              {getRoleBadge(currentUser.Role)}
+              <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold border ${roleDef.badgeBg} ${roleDef.badgeText} ${roleDef.badgeBorder}`}>
+                {roleDef.name}
+              </span>
             </div>
             <div className="text-xs text-slate-400 flex items-center justify-end gap-1.5 mt-0.5">
-              {currentUser.Role === 'DISTRICT_HR' || currentUser.Role === 'DIRECTOR' ? (
+              {roleDef.isDistrictBound ? (
                 <>
                   <Lock className="w-3 h-3 text-emerald-400 shrink-0" />
                   <span className="text-emerald-400 font-medium">
-                    {currentUser.Role === 'DIRECTOR' ? 'Directorate:' : 'Assigned:'} {currentDistrict?.DistrictName || 'District Not Assigned'}
+                    {currentDistrict?.DistrictName || 'District Not Assigned'}
                   </span>
                   <span className="text-slate-500 font-mono">({currentUser.DistrictID || 'N/A'})</span>
                 </>
-              ) : currentUser.Role === 'HO_MANAGER' ? (
-                <>
-                  <Lock className="w-3 h-3 text-blue-400 shrink-0" />
-                  <span className="text-blue-300 font-medium">Head Office Oversight • All 13 Districts</span>
-                </>
-              ) : currentUser.Role === 'AUDITOR' ? (
-                <>
-                  <Lock className="w-3 h-3 text-indigo-400 shrink-0" />
-                  <span className="text-indigo-300 font-medium">Internal Audit & Inspection • All 13 Districts</span>
-                </>
               ) : (
-                <span className="text-purple-300 font-medium">Enterprise Security & System Admin</span>
+                <>
+                  <ShieldCheck className="w-3 h-3 text-blue-400 shrink-0" />
+                  <span className="text-blue-300 font-medium">{roleDef.category} • All 13 Districts</span>
+                </>
               )}
             </div>
           </div>
 
-          {/* User selector dropdown ONLY for Authorized Administrator. Never rendered for non-admin users */}
+          {/* User selector dropdown ONLY for Authorized Administrator */}
           {isAuthorizedAdmin && (
             <div className="relative">
               <label htmlFor="user-select" className="sr-only">Switch User Persona (Administrator Access Only)</label>
@@ -239,98 +242,30 @@ export const Header: React.FC<HeaderProps> = ({
                     if (selected) onSwitchUser(selected);
                   }}
                 >
-                  <optgroup label="System Administrators (Full Admin)">
-                    {allUsers
-                      .filter(u => u.Role === 'ADMIN')
-                      .map(u => (
-                        <option key={u.UserID} value={u.UserID} className="bg-slate-900 text-white">
-                          {u.FullName} — System Administrator {u.IsActive ? '(Active)' : '🔒 (INACTIVE - BLOCKED)'}
-                        </option>
-                      ))}
-                  </optgroup>
-                  <optgroup label="District HR Officers (District-Restricted)">
-                    {allUsers
-                      .filter(u => u.Role === 'DISTRICT_HR')
-                      .map(u => {
-                        const dist = districts.find(d => d.DistrictID === u.DistrictID);
-                        return (
-                          <option key={u.UserID} value={u.UserID} className="bg-slate-900 text-white">
-                            {u.FullName} — {dist?.DistrictName || 'No District'} {u.IsActive ? '(Active)' : '🔒 (INACTIVE - BLOCKED)'}
-                          </option>
-                        );
-                      })}
-                  </optgroup>
-                  <optgroup label="District Directors (Authorized Signatory)">
-                    {allUsers
-                      .filter(u => u.Role === 'DIRECTOR')
-                      .map(u => {
-                        const dist = districts.find(d => d.DistrictID === u.DistrictID);
-                        return (
-                          <option key={u.UserID} value={u.UserID} className="bg-slate-900 text-white">
-                            {u.FullName} — Director ({dist?.DistrictName || 'No District'}) {u.IsActive ? '(Active)' : '🔒 (INACTIVE - BLOCKED)'}
-                          </option>
-                        );
-                      })}
-                  </optgroup>
-                  <optgroup label="Head Office HR Managers (13-District Oversight)">
-                    {allUsers
-                      .filter(u => u.Role === 'HO_MANAGER')
-                      .map(u => (
-                        <option key={u.UserID} value={u.UserID} className="bg-slate-900 text-white">
-                          {u.FullName} — Head Office Manager {u.IsActive ? '(Active)' : '🔒 (INACTIVE - BLOCKED)'}
-                        </option>
-                      ))}
-                  </optgroup>
-                  <optgroup label="Compliance Auditors (Inspection)">
-                    {allUsers
-                      .filter(u => u.Role === 'AUDITOR')
-                      .map(u => (
-                        <option key={u.UserID} value={u.UserID} className="bg-slate-900 text-white">
-                          {u.FullName} — Compliance Auditor {u.IsActive ? '(Active)' : '🔒 (INACTIVE - BLOCKED)'}
-                        </option>
-                      ))}
-                  </optgroup>
+                  {ALL_ROLES.map((roleKey) => {
+                    const roleUsers = allUsers.filter((u) => u.Role === roleKey);
+                    if (roleUsers.length === 0) return null;
+                    const rDef = getRoleDefinition(roleKey);
+                    return (
+                      <optgroup key={roleKey} label={`${rDef.name} (${roleUsers.length})`}>
+                        {roleUsers.map((u) => {
+                          const dist = districts.find((d) => d.DistrictID === u.DistrictID);
+                          const districtLabel = dist ? ` — ${dist.DistrictName}` : '';
+                          return (
+                            <option key={u.UserID} value={u.UserID} className="bg-slate-900 text-white">
+                              {u.FullName}{districtLabel} {u.IsActive ? '(Active)' : '🔒 (INACTIVE)'}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
+                    );
+                  })}
                 </select>
               </div>
             </div>
           )}
-
-          {/* Dedicated Sign Out Button */}
-          {onSignOut && (
-            <button
-              onClick={onSignOut}
-              className="px-2.5 py-1.5 rounded-lg bg-red-950/70 hover:bg-red-900 border border-red-800/80 text-red-200 text-xs font-semibold flex items-center gap-1.5 transition shadow-sm"
-              title="Sign Out of Portal"
-            >
-              <LogOut className="w-3.5 h-3.5 text-red-400" />
-              <span className="hidden sm:inline">Sign Out</span>
-            </button>
-          )}
         </div>
       </div>
-
-      {/* District Security Enforcement Banner for District HR */}
-      {currentUser.Role === 'DISTRICT_HR' && (
-        <div className="bg-emerald-950/80 border-t border-emerald-900 px-4 sm:px-6 lg:px-8 py-1.5 text-xs text-emerald-200 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Lock className="w-3.5 h-3.5 text-emerald-400" />
-            <span>
-              <strong>District Isolation Active:</strong> You are authenticated for <strong>{currentDistrict?.DistrictName} ({currentUser.DistrictID})</strong>. Access to other districts is restricted by data security rules.
-            </span>
-          </div>
-          <span className="hidden md:inline text-emerald-300/80">Authorized District Director: {currentDistrict?.DirectorName}</span>
-        </div>
-      )}
-
-      {/* Account Deactivated Warning if inactive user selected */}
-      {!currentUser.IsActive && (
-        <div className="bg-red-950 border-t border-red-800 px-4 sm:px-6 lg:px-8 py-2 text-xs text-red-200 flex items-center space-x-2">
-          <AlertCircle className="w-4 h-4 text-red-400" />
-          <span>
-            <strong>Account Inactive:</strong> This user account has been deactivated by the System Administrator. Access to submit or view reports is denied.
-          </span>
-        </div>
-      )}
     </header>
   );
 };

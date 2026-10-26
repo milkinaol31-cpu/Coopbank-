@@ -15,6 +15,8 @@ import {
   Download
 } from 'lucide-react';
 
+import { getRoleDefinition, hasPermission, canPerformAction } from '../rbac/rbacPolicy';
+
 interface ReportDetailModalProps {
   report: DisciplinaryReport;
   districts: District[];
@@ -37,8 +39,8 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
   onEditReport,
 }) => {
   const district = districts.find(d => d.DistrictID === report.DistrictID);
-  const isHOManager = currentUser.Role === 'HO_MANAGER' || currentUser.Role === 'ADMIN';
-  const isAuthorDistrict = currentUser.DistrictID === report.DistrictID;
+  const canReview = canPerformAction(currentUser.Role, 'approve', 'reports') || hasPermission(currentUser.Role, 'reports.review');
+  const canEdit = canPerformAction(currentUser.Role, 'edit', 'reports') && (currentUser.DistrictID === report.DistrictID || currentUser.Role === 'ADMIN');
 
   // Review states
   const [reviewComments, setReviewComments] = useState('');
@@ -100,7 +102,7 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
         {/* Modal Scrollable Body */}
         <div className="p-6 overflow-y-auto space-y-6 text-xs text-slate-700 dark:text-slate-300">
           {/* Head Office Review Actions Panel if applicable */}
-          {isHOManager && (report.ReportStatus === 'Submitted' || report.ReportStatus === 'Under Review') && (
+          {canReview && (report.ReportStatus === 'Submitted' || report.ReportStatus === 'Under Review') && (
             <div className="bg-blue-50/80 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/80 rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <h4 className="font-bold text-blue-950 dark:text-blue-200 flex items-center gap-1.5 text-sm">
@@ -186,7 +188,7 @@ export const ReportDetailModal: React.FC<ReportDetailModalProps> = ({
                   <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                   Head Office HR Returned This Report for Correction
                 </span>
-                {isAuthorDistrict && (
+                {canEdit && (
                   <button
                     onClick={() => onEditReport(report)}
                     className="px-3 py-1 bg-amber-700 text-white font-semibold rounded text-xs hover:bg-amber-800 flex items-center gap-1"

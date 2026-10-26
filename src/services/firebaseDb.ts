@@ -726,14 +726,21 @@ export function subscribeUsers(
         const d = docSnap.data();
         items.push({
           UserID: d.UserID || d.userId || docSnap.id,
+          EmployeeID: d.EmployeeID || d.employeeId || '',
           Email: d.Email || d.email || '',
           FullName: d.FullName || d.fullName || '',
           Role: d.Role || d.role || 'DISTRICT_HR',
           DistrictID: d.DistrictID || d.districtId || null,
+          Department: d.Department || d.department || 'General Banking',
           Position: d.Position || d.position || '',
           IsActive: !!(d.IsActive ?? d.isActive),
           CreatedAt: d.CreatedAt || d.createdAt || new Date().toISOString(),
+          UpdatedAt: d.UpdatedAt || d.updatedAt || d.CreatedAt || new Date().toISOString(),
+          CreatedBy: d.CreatedBy || d.createdBy || 'System',
+          UpdatedBy: d.UpdatedBy || d.updatedBy || '',
           LastLogin: d.LastLogin || d.lastLogin,
+          RoleHistory: Array.isArray(d.RoleHistory || d.roleHistory) ? (d.RoleHistory || d.roleHistory) : [],
+          LoginHistory: Array.isArray(d.LoginHistory || d.loginHistory) ? (d.LoginHistory || d.loginHistory) : [],
           Password: d.Password || d.password || 'CoopBank@2026',
           TemporaryPassword: d.TemporaryPassword || d.temporaryPassword,
           MustChangePassword: !!(d.MustChangePassword ?? d.mustChangePassword),
@@ -763,14 +770,21 @@ export async function fetchUserByEmailFromFirestore(email: string): Promise<User
       if (docEmail === cleanEmail) {
         found = {
           UserID: d.UserID || d.userId || docSnap.id,
+          EmployeeID: d.EmployeeID || d.employeeId || '',
           Email: d.Email || d.email || '',
           FullName: d.FullName || d.fullName || '',
           Role: d.Role || d.role || 'DISTRICT_HR',
           DistrictID: d.DistrictID || d.districtId || null,
+          Department: d.Department || d.department || 'General Banking',
           Position: d.Position || d.position || '',
           IsActive: !!(d.IsActive ?? d.isActive),
           CreatedAt: d.CreatedAt || d.createdAt || new Date().toISOString(),
+          UpdatedAt: d.UpdatedAt || d.updatedAt || d.CreatedAt || new Date().toISOString(),
+          CreatedBy: d.CreatedBy || d.createdBy || 'System',
+          UpdatedBy: d.UpdatedBy || d.updatedBy || '',
           LastLogin: d.LastLogin || d.lastLogin,
+          RoleHistory: Array.isArray(d.RoleHistory || d.roleHistory) ? (d.RoleHistory || d.roleHistory) : [],
+          LoginHistory: Array.isArray(d.LoginHistory || d.loginHistory) ? (d.LoginHistory || d.loginHistory) : [],
           Password: d.Password || d.password || 'CoopBank@2026',
           TemporaryPassword: d.TemporaryPassword || d.temporaryPassword,
           MustChangePassword: !!(d.MustChangePassword ?? d.mustChangePassword),
@@ -786,39 +800,62 @@ export async function fetchUserByEmailFromFirestore(email: string): Promise<User
   }
 }
 
-export async function saveUserToFirestore(user: User, actorEmail: string, actorName: string): Promise<void> {
+export async function saveUserToFirestore(
+  user: User,
+  actorEmail: string,
+  actorName: string,
+  roleChangeReason?: string
+): Promise<void> {
   const path = `${COLLECTIONS.USERS}/${user.UserID}`;
+  const now = new Date().toISOString();
+
+  const userDocPayload = {
+    userId: user.UserID,
+    UserID: user.UserID,
+    employeeId: user.EmployeeID || '',
+    EmployeeID: user.EmployeeID || '',
+    email: user.Email,
+    Email: user.Email,
+    fullName: user.FullName,
+    FullName: user.FullName,
+    role: user.Role,
+    Role: user.Role,
+    districtId: user.DistrictID || '',
+    DistrictID: user.DistrictID,
+    department: user.Department || 'General Banking',
+    Department: user.Department || 'General Banking',
+    position: user.Position,
+    Position: user.Position,
+    isActive: user.IsActive,
+    IsActive: user.IsActive,
+    createdAt: user.CreatedAt || now,
+    CreatedAt: user.CreatedAt || now,
+    updatedAt: now,
+    UpdatedAt: now,
+    createdBy: user.CreatedBy || actorEmail,
+    CreatedBy: user.CreatedBy || actorEmail,
+    updatedBy: actorEmail,
+    UpdatedBy: actorEmail,
+    lastLogin: user.LastLogin || now,
+    LastLogin: user.LastLogin,
+    roleHistory: user.RoleHistory || [],
+    RoleHistory: user.RoleHistory || [],
+    loginHistory: user.LoginHistory || [],
+    LoginHistory: user.LoginHistory || [],
+    password: user.Password || 'CoopBank@2026',
+    Password: user.Password || 'CoopBank@2026',
+    temporaryPassword: user.TemporaryPassword || '',
+    TemporaryPassword: user.TemporaryPassword || '',
+    mustChangePassword: !!user.MustChangePassword,
+    MustChangePassword: !!user.MustChangePassword,
+    activationCode: user.ActivationCode || '',
+    ActivationCode: user.ActivationCode || '',
+    lastPasswordReset: user.LastPasswordReset || '',
+    LastPasswordReset: user.LastPasswordReset || '',
+  };
+
   try {
-    await setDoc(doc(db, COLLECTIONS.USERS, user.UserID), {
-      userId: user.UserID,
-      UserID: user.UserID,
-      email: user.Email,
-      Email: user.Email,
-      fullName: user.FullName,
-      FullName: user.FullName,
-      role: user.Role,
-      Role: user.Role,
-      districtId: user.DistrictID || '',
-      DistrictID: user.DistrictID,
-      position: user.Position,
-      Position: user.Position,
-      isActive: user.IsActive,
-      IsActive: user.IsActive,
-      createdAt: user.CreatedAt,
-      CreatedAt: user.CreatedAt,
-      lastLogin: user.LastLogin || new Date().toISOString(),
-      LastLogin: user.LastLogin,
-      password: user.Password || 'CoopBank@2026',
-      Password: user.Password || 'CoopBank@2026',
-      temporaryPassword: user.TemporaryPassword || '',
-      TemporaryPassword: user.TemporaryPassword || '',
-      mustChangePassword: !!user.MustChangePassword,
-      MustChangePassword: !!user.MustChangePassword,
-      activationCode: user.ActivationCode || '',
-      ActivationCode: user.ActivationCode || '',
-      lastPasswordReset: user.LastPasswordReset || '',
-      LastPasswordReset: user.LastPasswordReset || '',
-    });
+    await setDoc(doc(db, COLLECTIONS.USERS, user.UserID), userDocPayload, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -840,12 +877,12 @@ export async function saveUserToFirestore(user: User, actorEmail: string, actorN
       EntityType: 'User',
       entityId: user.UserID,
       EntityID: user.UserID,
-      timestamp: new Date().toISOString(),
-      Timestamp: new Date().toISOString(),
-      changeSummary: `Updated profile for ${user.FullName} (${user.Email}) with role ${user.Role}`,
-      ChangeSummary: `Updated profile for ${user.FullName} (${user.Email}) with role ${user.Role}`,
-      reasonForChange: 'Account maintenance.',
-      ReasonForChange: 'Account maintenance.',
+      timestamp: now,
+      Timestamp: now,
+      changeSummary: `Admin ${actorName} (${actorEmail}) updated profile for ${user.FullName} (${user.Email}) - Role: ${user.Role}, Status: ${user.IsActive ? 'Active' : 'Inactive'}, District: ${user.DistrictID || 'Cross-District'}`,
+      ChangeSummary: `Admin ${actorName} (${actorEmail}) updated profile for ${user.FullName} (${user.Email}) - Role: ${user.Role}, Status: ${user.IsActive ? 'Active' : 'Inactive'}, District: ${user.DistrictID || 'Cross-District'}`,
+      reasonForChange: roleChangeReason || 'Enterprise user role and jurisdiction maintenance.',
+      ReasonForChange: roleChangeReason || 'Enterprise user role and jurisdiction maintenance.',
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, auditPath);
