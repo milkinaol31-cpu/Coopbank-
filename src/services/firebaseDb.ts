@@ -54,6 +54,7 @@ export const COLLECTIONS = {
  * and audit records stored in Firestore.
  */
 export async function seedInitialDataIfEmpty(): Promise<boolean> {
+  if (!auth.currentUser) return false;
   try {
     const districtsCol = collection(db, COLLECTIONS.DISTRICTS);
     let snapshot;
@@ -315,6 +316,7 @@ export async function seedInitialDataIfEmpty(): Promise<boolean> {
 // ----------------- Disciplinary Reports Operations -----------------
 
 export async function fetchReportsFromFirestore(): Promise<DisciplinaryReport[]> {
+  if (!auth.currentUser) return [];
   const path = COLLECTIONS.REPORTS;
   try {
     const snap = await getDocs(collection(db, path));
@@ -605,6 +607,7 @@ export async function addReportReviewToFirestore(
 // ----------------- Districts Operations -----------------
 
 export async function fetchDistrictsFromFirestore(): Promise<District[]> {
+  if (!auth.currentUser) return [];
   const path = COLLECTIONS.DISTRICTS;
   try {
     const snap = await getDocs(collection(db, path));
@@ -684,6 +687,7 @@ export async function saveDistrictToFirestore(district: District, actorEmail: st
 // ----------------- Users Operations -----------------
 
 export async function fetchUsersFromFirestore(): Promise<User[]> {
+  if (!auth.currentUser) return [];
   const path = COLLECTIONS.USERS;
   try {
     const snap = await getDocs(collection(db, path));
@@ -758,7 +762,7 @@ export function subscribeUsers(
 }
 
 export async function fetchUserByEmailFromFirestore(email: string): Promise<User | null> {
-  if (!email) return null;
+  if (!email || !auth.currentUser) return null;
   const cleanEmail = email.trim().toLowerCase();
   const path = COLLECTIONS.USERS;
   try {

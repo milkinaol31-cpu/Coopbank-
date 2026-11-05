@@ -17,6 +17,7 @@ interface FirebaseContextType {
   isConnected: boolean;
   isSeeding: boolean;
   dbError: string | null;
+  clearDbError: () => void;
   signInWithGoogle: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   sendPasswordReset: (email: string) => Promise<{ success: boolean; error?: string }>;
@@ -32,6 +33,10 @@ export const FirebaseProvider: React.FC<{ children: ReactNode }> = ({ children }
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isSeeding, setIsSeeding] = useState<boolean>(false);
   const [dbError, setDbError] = useState<string | null>(null);
+
+  const clearDbError = useCallback(() => {
+    setDbError(null);
+  }, []);
 
   // Validate server connection and seed initial data if needed
   const checkConnectionAndSeed = useCallback(async (user: FirebaseUser | null) => {
@@ -95,6 +100,9 @@ export const FirebaseProvider: React.FC<{ children: ReactNode }> = ({ children }
         setDbError('Sign-in cancelled. Please allow popups if prompted.');
       } else if (err.code === 'auth/popup-blocked') {
         setDbError('Popup was blocked by your browser. Please allow popups for this site.');
+      } else if (err.code === 'auth/unauthorized-domain' || err.message?.includes('unauthorized-domain')) {
+        const currentDomain = typeof window !== 'undefined' ? window.location.hostname : 'your current domain';
+        setDbError(`Domain "${currentDomain}" is not authorized for Google Sign-In in Firebase. To enable Google Sign-In, add "${currentDomain}" to Authorized Domains in Firebase Console (Authentication > Settings > Authorized Domains). In the meantime, you can log in directly using your registered email and password.`);
       } else {
         setDbError(err.message || 'Failed to sign in with Google.');
       }
@@ -161,6 +169,7 @@ export const FirebaseProvider: React.FC<{ children: ReactNode }> = ({ children }
         isConnected,
         isSeeding,
         dbError,
+        clearDbError,
         signInWithGoogle,
         signInWithEmail,
         sendPasswordReset,

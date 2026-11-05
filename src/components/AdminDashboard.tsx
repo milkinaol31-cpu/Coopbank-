@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, District, UserRole, RoleChangeRecord } from '../types';
-import { getRoleDefinition, ALL_ROLES, ROLE_DEFINITIONS } from '../rbac/rbacPolicy';
+import { getRoleDefinition, ALL_ROLES, ROLE_DEFINITIONS, hasPermission } from '../rbac/rbacPolicy';
 import { UserRbacModal } from './UserRbacModal';
 import {
   Users,
@@ -26,6 +26,8 @@ import {
 } from 'lucide-react';
 
 interface AdminDashboardProps {
+  currentUser?: User;
+  initialTab?: 'users' | 'districts' | 'settings';
   users: User[];
   districts: District[];
   onUpdateUser: (updatedUser: User) => void;
@@ -35,6 +37,8 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
+  currentUser,
+  initialTab = 'users',
   users,
   districts,
   onUpdateUser,
@@ -42,7 +46,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onUpdateDistrict,
   onSendPasswordReset,
 }) => {
-  const [activeTab, setActiveTab] = useState<'users' | 'districts' | 'settings'>('users');
+  // STRICT SECURITY GATE: Only the ADMIN role (System Administrator) is authorized for User Provisioning and RBAC control
+  const isAdmin = currentUser?.Role === 'ADMIN';
+  const defaultTab = isAdmin ? initialTab : 'districts';
+  const [activeTab, setActiveTab] = useState<'users' | 'districts' | 'settings'>(defaultTab);
+
+  useEffect(() => {
+    if (!isAdmin && activeTab !== 'districts') {
+      setActiveTab('districts');
+    } else if (initialTab && isAdmin) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab, isAdmin, activeTab]);
   
   // User Modal State
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -88,6 +103,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleOpenCreateUser = () => {
+    if (!isAdmin) {
+      setFormError('Access Denied: Only System Administrators can provision new users.');
+      return;
+    }
     setFormError(null);
     setActionSuccessMessage(null);
     setRoleChangeReasonInput('');
@@ -106,6 +125,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleOpenEditUser = (u: User) => {
+    if (!isAdmin) {
+      setFormError('Access Denied: Only System Administrators can modify user accounts.');
+      return;
+    }
     setFormError(null);
     setActionSuccessMessage(null);
     setRoleChangeReasonInput('');
@@ -125,6 +148,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
       setFormError('A valid official bank or Google email address is required (e.g. employee@coopbank.com or name@gmail.com).');
+      return;
+    }
+
+    if (!isAdmin) {
+      setFormError('Access Denied: Only System Administrators are authorized to provision or modify user accounts.');
       return;
     }
 
@@ -289,6 +317,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleToggleUserStatus = (u: User) => {
+    if (!isAdmin) return;
     onUpdateUser({
       ...u,
       IsActive: !u.IsActive,
@@ -296,6 +325,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleOpenResetPassword = (u: User) => {
+    if (!isAdmin) return;
     setResetTargetUser(u);
     setTempPasswordInput(`Cbo@${Math.floor(1000 + Math.random() * 9000)}!`);
     setResetSuccessMessage(null);
@@ -355,160 +385,208 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Top Admin Banner */}
+      {/* Top Banner */}
       <div className="bg-gradient-to-r from-purple-950 via-slate-900 to-indigo-950 rounded-xl p-6 text-white shadow-lg border border-purple-900">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <div className="flex items-center space-x-2 text-purple-300 text-xs font-semibold uppercase tracking-wider mb-1">
               <ShieldAlert className="w-4 h-4" />
-              <span>System Administration & Security Governance</span>
+              <span>{isAdmin ? 'System Administration & Security Governance' : 'Cooperative Bank of Oromia Districts'}</span>
             </div>
             <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-              Enterprise Access & Directory Management
+              {isAdmin ? 'Enterprise Access & Directory Management' : 'Autonomous 13 Districts Registry'}
             </h2>
             <p className="text-xs text-slate-300 mt-1">
-              Configure multi-role access controls, 13 district assignments, security filters, and audit preservation.
+              {isAdmin
+                ? 'Configure multi-role access controls, 13 district assignments, user provisioning, and security audit logs.'
+                : 'Official directory of the 13 Cooperative Bank of Oromia reporting jurisdictions and directorates.'}
             </p>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={handleOpenCreateUser}
-              className="inline-flex items-center space-x-2 bg-purple-700 hover:bg-purple-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow transition"
-            >
-              <UserPlus className="w-4 h-4" />
-              <span>Provision New User</span>
-            </button>
-          </div>
+          {isAdmin && (
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={handleOpenCreateUser}
+                className="inline-flex items-center space-x-2 bg-purple-700 hover:bg-purple-600 active:bg-purple-800 text-white px-4 py-2 rounded-lg text-xs font-bold shadow transition"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Provision New User</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Admin Stats Overview */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
-            <span className="text-xs font-semibold uppercase">Active Users</span>
-            <Users className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+      {/* Stats Overview */}
+      {isAdmin ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
+              <span className="text-xs font-semibold uppercase">Active Users</span>
+              <Users className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+            </div>
+            <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">{activeUsersCount} / {users.length}</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Authenticated profiles</div>
           </div>
-          <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">{activeUsersCount} / {users.length}</div>
-          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Authenticated profiles</div>
-        </div>
 
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
-            <span className="text-xs font-semibold uppercase">13 Districts</span>
-            <MapPin className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
+              <span className="text-xs font-semibold uppercase">13 Districts</span>
+              <MapPin className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div className="text-2xl font-bold text-blue-900 dark:text-blue-300">{districts.length}</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">100% active jurisdictions</div>
           </div>
-          <div className="text-2xl font-bold text-blue-900 dark:text-blue-300">{districts.length}</div>
-          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">100% active jurisdictions</div>
-        </div>
 
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
-            <span className="text-xs font-semibold uppercase">District HR Officers</span>
-            <Building className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
+              <span className="text-xs font-semibold uppercase">District HR Officers</span>
+              <Building className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <div className="text-2xl font-bold text-emerald-900 dark:text-emerald-300">{districtHROfficersCount}</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Assigned to district rows</div>
           </div>
-          <div className="text-2xl font-bold text-emerald-900 dark:text-emerald-300">{districtHROfficersCount}</div>
-          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Assigned to district rows</div>
-        </div>
 
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
-            <span className="text-xs font-semibold uppercase">HO Managers & Admins</span>
-            <Key className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
+              <span className="text-xs font-semibold uppercase">HO Managers & Admins</span>
+              <Key className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            </div>
+            <div className="text-2xl font-bold text-indigo-900 dark:text-indigo-300">{hoManagersCount + adminsCount}</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{hoManagersCount} Managers, {adminsCount} Admins</div>
           </div>
-          <div className="text-2xl font-bold text-indigo-900 dark:text-indigo-300">{hoManagersCount + adminsCount}</div>
-          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">{hoManagersCount} Managers, {adminsCount} Admins</div>
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
+              <span className="text-xs font-semibold uppercase">13 Autonomous Districts</span>
+              <MapPin className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div className="text-2xl font-bold text-blue-900 dark:text-blue-300">{districts.length} Active Hubs</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Autonomous operational branches</div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
+              <span className="text-xs font-semibold uppercase">Jurisdiction Model</span>
+              <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <div className="text-2xl font-bold text-emerald-900 dark:text-emerald-300">Row-Level Isolation</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Restricted to designated boundary</div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+            <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 mb-1">
+              <span className="text-xs font-semibold uppercase">Directory Access</span>
+              <Building className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+            </div>
+            <div className="text-2xl font-bold text-purple-900 dark:text-purple-300">Read-Only Directory</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">Official bank-wide district registry</div>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
-      <div className="flex space-x-2 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold">
-        <button
-          onClick={() => setActiveTab('users')}
-          className={`pb-3 px-3 transition-colors flex items-center gap-1.5 ${
-            activeTab === 'users'
-              ? 'border-b-2 border-purple-700 text-purple-700 dark:text-purple-400 font-bold'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-          }`}
-        >
-          <Users className="w-4 h-4" />
-          <span>User Accounts & District Assignments ({users.length})</span>
-        </button>
+      {isAdmin && (
+        <div className="flex space-x-2 border-b border-slate-200 dark:border-slate-800 text-xs font-semibold">
+          <button
+            onClick={() => setActiveTab('users')}
+            className={`pb-3 px-3 transition-colors flex items-center gap-1.5 ${
+              activeTab === 'users'
+                ? 'border-b-2 border-purple-700 text-purple-700 dark:text-purple-400 font-bold'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            <Users className="w-4 h-4" />
+            <span>User Accounts & District Assignments ({users.length})</span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('districts')}
-          className={`pb-3 px-3 transition-colors flex items-center gap-1.5 ${
-            activeTab === 'districts'
-              ? 'border-b-2 border-purple-700 text-purple-700 dark:text-purple-400 font-bold'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-          }`}
-        >
-          <MapPin className="w-4 h-4" />
-          <span>13 Districts Directory ({districts.length})</span>
-        </button>
+          <button
+            onClick={() => setActiveTab('districts')}
+            className={`pb-3 px-3 transition-colors flex items-center gap-1.5 ${
+              activeTab === 'districts'
+                ? 'border-b-2 border-purple-700 text-purple-700 dark:text-purple-400 font-bold'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            <MapPin className="w-4 h-4" />
+            <span>13 Districts Directory ({districts.length})</span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('settings')}
-          className={`pb-3 px-3 transition-colors flex items-center gap-1.5 ${
-            activeTab === 'settings'
-              ? 'border-b-2 border-purple-700 text-purple-700 dark:text-purple-400 font-bold'
-              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-          }`}
-        >
-          <Settings className="w-4 h-4" />
-          <span>Security & Policy Settings</span>
-        </button>
-      </div>
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`pb-3 px-3 transition-colors flex items-center gap-1.5 ${
+              activeTab === 'settings'
+                ? 'border-b-2 border-purple-700 text-purple-700 dark:text-purple-400 font-bold'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            <Settings className="w-4 h-4" />
+            <span>Security & Policy Settings</span>
+          </button>
+        </div>
+      )}
 
       {/* Tab 1: Users Table */}
       {activeTab === 'users' && (
-        <div className="space-y-4">
-          {/* District Isolation Explanation Card */}
-          <div className="bg-gradient-to-r from-blue-950 via-slate-900 to-indigo-950 border border-blue-800/70 rounded-xl p-4 sm:p-5 text-white shadow-md">
-            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 pb-3 border-b border-blue-800/40">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-8 h-8 rounded-lg bg-blue-600/30 border border-blue-400/40 flex items-center justify-center shrink-0">
-                  <ShieldAlert className="w-4 h-4 text-blue-400" />
+        !isAdmin ? (
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-red-200 dark:border-red-900/60 p-8 text-center max-w-md mx-auto space-y-3 shadow-sm">
+            <Lock className="w-12 h-12 text-red-500 mx-auto" />
+            <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Area</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-400">
+              User account provisioning, credential management, and role assignments are restricted strictly to System Administrators.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* District Isolation Explanation Card */}
+            <div className="bg-gradient-to-r from-blue-950 via-slate-900 to-indigo-950 border border-blue-800/70 rounded-xl p-4 sm:p-5 text-white shadow-md">
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 pb-3 border-b border-blue-800/40">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-blue-600/30 border border-blue-400/40 flex items-center justify-center shrink-0">
+                    <ShieldAlert className="w-4 h-4 text-blue-400" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-white flex items-center gap-2">
+                      How District Data Restriction Works
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-900/80 text-blue-300 border border-blue-700">
+                        RBAC & Row-Level Security
+                      </span>
+                    </h4>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      Example: Restricting a <strong>District HR Officer</strong> to view strictly <strong>Adama District</strong> data.
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h4 className="font-bold text-sm text-white flex items-center gap-2">
-                    How District Data Restriction Works
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-900/80 text-blue-300 border border-blue-700">
-                      RBAC & Row-Level Security
-                    </span>
-                  </h4>
-                  <p className="text-xs text-slate-300 mt-0.5">
-                    Example: Restricting a <strong>District HR Officer</strong> to view strictly <strong>Adama District</strong> data.
-                  </p>
-                </div>
-              </div>
 
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    const existing = users.find(u => u.Email.toLowerCase() === 'adama.hr@coopbank.com');
-                    if (existing) {
-                      handleOpenEditUser(existing);
-                    } else {
-                      setUserFormData({
-                        FullName: 'Adama District HR Officer',
-                        Email: 'adama.hr@coopbank.com',
-                        Role: 'DISTRICT_HR',
-                        DistrictID: 'DIST-01',
-                        Position: 'Senior District HR Officer - Adama District',
-                        IsActive: true,
-                      });
-                      setIsCreatingUser(true);
-                    }
-                  }}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold rounded-lg text-xs transition flex items-center gap-1.5 shadow"
-                >
-                  <Building className="w-3.5 h-3.5" />
-                  <span>Inspect Adama District Binding</span>
-                </button>
+                {isAdmin && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        const existing = users.find(u => u.Email.toLowerCase() === 'adama.hr@coopbank.com');
+                        if (existing) {
+                          handleOpenEditUser(existing);
+                        } else {
+                          setUserFormData({
+                            FullName: 'Adama District HR Officer',
+                            Email: 'adama.hr@coopbank.com',
+                            Role: 'DISTRICT_HR',
+                            DistrictID: 'DIST-01',
+                            Position: 'Senior District HR Officer - Adama District',
+                            IsActive: true,
+                          });
+                          setIsCreatingUser(true);
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold rounded-lg text-xs transition flex items-center gap-1.5 shadow"
+                    >
+                      <Building className="w-3.5 h-3.5" />
+                      <span>Inspect Adama District Binding</span>
+                    </button>
+                  </div>
+                )}
               </div>
-            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 text-xs">
               <div className="bg-slate-900/60 border border-blue-900/50 rounded-lg p-3">
@@ -562,13 +640,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   Only registered staff with <span className="font-semibold text-emerald-600 dark:text-emerald-400">Active</span> status can log in. Users toggled to <span className="font-semibold text-red-600 dark:text-red-400">Inactive</span> are immediately locked out in real-time.
                 </p>
               </div>
-              <button
-                onClick={handleOpenCreateUser}
-                className="px-3.5 py-2 bg-purple-700 hover:bg-purple-600 active:bg-purple-800 text-white rounded-lg text-xs font-bold flex items-center gap-2 transition shadow"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add / Provision New User</span>
-              </button>
+              {isAdmin && (
+                <button
+                  onClick={handleOpenCreateUser}
+                  className="px-3.5 py-2 bg-purple-700 hover:bg-purple-600 active:bg-purple-800 text-white rounded-lg text-xs font-bold flex items-center gap-2 transition shadow"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add / Provision New User</span>
+                </button>
+              )}
             </div>
 
             {/* Quick Search & Role Filter Bar */}
@@ -651,67 +731,69 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 );
                               })()}
 
-                              {/* Quick Role Switcher for instant live effect */}
-                              <select
-                                value={u.Role}
-                                onChange={(e) => {
-                                  const newRole = e.target.value as UserRole;
-                                  const roleDef = getRoleDefinition(newRole);
-                                  const now = new Date().toISOString();
-                                  const isDist = roleDef.isDistrictBound;
-                                  const defaultPos = newRole === 'ADMIN'
-                                    ? 'Enterprise System Administrator'
-                                    : newRole === 'HO_MANAGER'
-                                    ? 'Head Office HR Manager'
-                                    : newRole === 'HO_HR'
-                                    ? 'Head Office HR Specialist'
-                                    : newRole === 'DISTRICT_MANAGER'
-                                    ? 'District General Manager'
-                                    : newRole === 'BRANCH_MANAGER'
-                                    ? 'Branch Operations Manager'
-                                    : newRole === 'AUDITOR'
-                                    ? 'Internal Compliance Auditor'
-                                    : newRole === 'DIRECTOR'
-                                    ? 'Authorized District Director'
-                                    : newRole === 'EMPLOYEE'
-                                    ? 'Bank Staff'
-                                    : 'District HR Officer';
+                              {/* Quick Role Switcher for instant live effect (ADMIN only) */}
+                              {isAdmin && (
+                                <select
+                                  value={u.Role}
+                                  onChange={(e) => {
+                                    const newRole = e.target.value as UserRole;
+                                    const roleDef = getRoleDefinition(newRole);
+                                    const now = new Date().toISOString();
+                                    const isDist = roleDef.isDistrictBound;
+                                    const defaultPos = newRole === 'ADMIN'
+                                      ? 'Enterprise System Administrator'
+                                      : newRole === 'HO_MANAGER'
+                                      ? 'Head Office HR Manager'
+                                      : newRole === 'HO_HR'
+                                      ? 'Head Office HR Specialist'
+                                      : newRole === 'DISTRICT_MANAGER'
+                                      ? 'District General Manager'
+                                      : newRole === 'BRANCH_MANAGER'
+                                      ? 'Branch Operations Manager'
+                                      : newRole === 'AUDITOR'
+                                      ? 'Internal Compliance Auditor'
+                                      : newRole === 'DIRECTOR'
+                                      ? 'Authorized District Director'
+                                      : newRole === 'EMPLOYEE'
+                                      ? 'Bank Staff'
+                                      : 'District HR Officer';
 
-                                  const roleHistory: RoleChangeRecord[] = [
-                                    {
-                                      id: `RH-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-                                      userId: u.UserID,
-                                      userEmail: u.Email,
-                                      previousRole: u.Role,
-                                      newRole: newRole,
-                                      changedByEmail: 'admin@coopbank.com',
-                                      changedByName: 'Enterprise Administrator',
-                                      changedAt: now,
-                                      reason: `Role changed from ${getRoleDefinition(u.Role).name} to ${roleDef.name} via User Management Console.`,
-                                    },
-                                    ...(u.RoleHistory || []),
-                                  ];
+                                    const roleHistory: RoleChangeRecord[] = [
+                                      {
+                                        id: `RH-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                                        userId: u.UserID,
+                                        userEmail: u.Email,
+                                        previousRole: u.Role,
+                                        newRole: newRole,
+                                        changedByEmail: 'admin@coopbank.com',
+                                        changedByName: 'Enterprise Administrator',
+                                        changedAt: now,
+                                        reason: `Role changed from ${getRoleDefinition(u.Role).name} to ${roleDef.name} via User Management Console.`,
+                                      },
+                                      ...(u.RoleHistory || []),
+                                    ];
 
-                                  onUpdateUser({
-                                    ...u,
-                                    Role: newRole,
-                                    DistrictID: isDist ? (u.DistrictID || 'DIST-01') : null,
-                                    Position: u.Position || defaultPos,
-                                    RoleHistory: roleHistory,
-                                    UpdatedAt: now,
-                                    UpdatedBy: 'Enterprise Administrator',
-                                  });
-                                  setActionSuccessMessage(`Role for ${u.FullName} (${u.Email}) updated to ${roleDef.name}. Immediate effect applied across all tabs!`);
-                                }}
-                                className="text-[10px] bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-1.5 py-0.5 font-medium text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500 cursor-pointer hover:border-purple-400"
-                                title="Change role immediately"
-                              >
-                                {ALL_ROLES.map((r) => (
-                                  <option key={r} value={r}>
-                                    Switch to {getRoleDefinition(r).name}
-                                  </option>
-                                ))}
-                              </select>
+                                    onUpdateUser({
+                                      ...u,
+                                      Role: newRole,
+                                      DistrictID: isDist ? (u.DistrictID || 'DIST-01') : null,
+                                      Position: u.Position || defaultPos,
+                                      RoleHistory: roleHistory,
+                                      UpdatedAt: now,
+                                      UpdatedBy: 'Enterprise Administrator',
+                                    });
+                                    setActionSuccessMessage(`Role for ${u.FullName} (${u.Email}) updated to ${roleDef.name}. Immediate effect applied across all tabs!`);
+                                  }}
+                                  className="text-[10px] bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-1.5 py-0.5 font-medium text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-purple-500 cursor-pointer hover:border-purple-400"
+                                  title="Change role immediately"
+                                >
+                                  {ALL_ROLES.map((r) => (
+                                    <option key={r} value={r}>
+                                      Switch to {getRoleDefinition(r).name}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
                             </div>
                             <span className="text-[10px] text-slate-500 dark:text-slate-400">{u.Position}</span>
                           </div>
@@ -738,35 +820,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           )}
                         </td>
                         <td className="py-3 px-3.5 text-right whitespace-nowrap">
-                          <div className="flex items-center justify-end space-x-2">
-                            <button
-                              onClick={() => handleToggleUserStatus(u)}
-                              className={`px-2 py-1 rounded text-[11px] font-medium border transition ${
-                                u.IsActive
-                                  ? 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/50 border-red-200 dark:border-red-800'
-                                  : 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 border-emerald-200 dark:border-emerald-800'
-                              }`}
-                            >
-                              {u.IsActive ? 'Deactivate' : 'Reactivate'}
-                            </button>
+                          {isAdmin ? (
+                            <div className="flex items-center justify-end space-x-2">
+                              <button
+                                onClick={() => handleToggleUserStatus(u)}
+                                className={`px-2 py-1 rounded text-[11px] font-medium border transition ${
+                                  u.IsActive
+                                    ? 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/50 border-red-200 dark:border-red-800'
+                                    : 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 border-emerald-200 dark:border-emerald-800'
+                                }`}
+                              >
+                                {u.IsActive ? 'Deactivate' : 'Reactivate'}
+                              </button>
 
-                            <button
-                              onClick={() => handleOpenResetPassword(u)}
-                              className="px-2.5 py-1 text-[11px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800 rounded transition flex items-center gap-1 shadow-xs"
-                              title="Reset User Account Password & Send Activation"
-                            >
-                              <KeyRound className="w-3 h-3 text-blue-600 dark:text-blue-400" />
-                              <span>Reset Password</span>
-                            </button>
+                              <button
+                                onClick={() => handleOpenResetPassword(u)}
+                                className="px-2.5 py-1 text-[11px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800 rounded transition flex items-center gap-1 shadow-xs"
+                                title="Reset User Account Password & Send Activation"
+                              >
+                                <KeyRound className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                                <span>Reset Password</span>
+                              </button>
 
-                            <button
-                              onClick={() => handleOpenEditUser(u)}
-                              className="p-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition"
-                              title="Edit User"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                              <button
+                                onClick={() => handleOpenEditUser(u)}
+                                className="p-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition"
+                                title="Edit User"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-400 dark:text-slate-500 italic">Read-Only</span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -776,6 +862,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       </div>
+        )
       )}
 
       {/* Tab 2: 13 Districts Registry Table */}
@@ -809,12 +896,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <td className="py-3 px-3.5 font-medium text-slate-800 dark:text-slate-200">{d.DirectorName}</td>
                     <td className="py-3 px-3.5 text-slate-500 dark:text-slate-400 truncate max-w-[200px]">{d.OfficeLocation}</td>
                     <td className="py-3 px-3.5 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => setEditingDistrict(d)}
-                        className="px-2 py-1 text-xs text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 border border-purple-200 dark:border-purple-800 rounded font-medium transition"
-                      >
-                        Edit Details
-                      </button>
+                      {isAdmin || hasPermission(currentUser?.Role, 'districts.manage') ? (
+                        <button
+                          onClick={() => setEditingDistrict(d)}
+                          className="px-2 py-1 text-xs text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 border border-purple-200 dark:border-purple-800 rounded font-medium transition"
+                        >
+                          Edit Details
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-slate-400 dark:text-slate-500 italic">Read-Only</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -826,73 +917,83 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Tab 3: Security & Policy Settings */}
       {activeTab === 'settings' && (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-6 space-y-6 transition-colors">
-          <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 border-b border-slate-100 dark:border-slate-800 pb-3">
-            Enterprise Disciplinary Reporting & Retention Settings
-          </h3>
+        !isAdmin ? (
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-red-200 dark:border-red-900/60 p-8 text-center max-w-md mx-auto space-y-3 shadow-sm">
+            <Lock className="w-12 h-12 text-red-500 mx-auto" />
+            <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Area</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-400">
+              Security and policy configurations are reserved strictly for System Administrators.
+            </p>
+          </div>
+        ) : (
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-6 space-y-6 transition-colors">
+            <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100 border-b border-slate-100 dark:border-slate-800 pb-3">
+              Enterprise Disciplinary Reporting & Retention Settings
+            </h3>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
-            <div className="space-y-4">
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-2">
-                <span className="font-bold text-slate-900 dark:text-slate-100 block">Row-Level Security (AppSheet Security Filters)</span>
-                <p className="text-slate-600 dark:text-slate-300">
-                  Enforces that queries executed by District HR accounts are filtered at source using the formula:
-                </p>
-                <code className="block p-2 rounded bg-slate-900 dark:bg-slate-950 text-emerald-400 font-mono text-[11px] border border-slate-800">
-                  [DistrictID] = LOOKUP(USEREMAIL(), "Users", "Email", "DistrictID")
-                </code>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Head Office Managers and Administrators evaluate to TRUE across all rows.
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-2">
-                <span className="font-bold text-slate-900 dark:text-slate-100 block">Audit Log Immutability Policy</span>
-                <p className="text-slate-600 dark:text-slate-300">
-                  All submissions, corrections, review approvals, and user status toggles are recorded into the immutable AuditLog table with user timestamp, email, and diff summary.
-                </p>
-                <div className="flex items-center text-emerald-700 dark:text-emerald-400 font-semibold gap-1.5 text-xs">
-                  <CheckCircle className="w-4 h-4" />
-                  <span>Permanent Audit Trail Active</span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-2">
+                  <span className="font-bold text-slate-900 dark:text-slate-100 block">Row-Level Security (AppSheet Security Filters)</span>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    Enforces that queries executed by District HR accounts are filtered at source using the formula:
+                  </p>
+                  <code className="block p-2 rounded bg-slate-900 dark:bg-slate-950 text-emerald-400 font-mono text-[11px] border border-slate-800">
+                    [DistrictID] = LOOKUP(USEREMAIL(), "Users", "Email", "DistrictID")
+                  </code>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Head Office Managers and Administrators evaluate to TRUE across all rows.
+                  </p>
                 </div>
-              </div>
-            </div>
 
-            <div className="space-y-4">
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/30 space-y-3">
-                <span className="font-bold text-slate-900 dark:text-slate-100 block">Filing & Record Retention</span>
-                <div className="space-y-2">
-                  <label className="block text-slate-700 dark:text-slate-300 font-semibold">Current Active Reporting Period:</label>
-                  <input
-                    type="text"
-                    disabled
-                    value="2026-Q4 (October - December 2026)"
-                    className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded p-2 text-slate-700 dark:text-slate-300 font-medium"
-                  />
-
-                  <label className="block text-slate-700 dark:text-slate-300 font-semibold pt-2">Regulatory Archive Retention Period:</label>
-                  <input
-                    type="text"
-                    disabled
-                    value="7 Years (Standard Bank Regulatory Compliance)"
-                    className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded p-2 text-slate-700 dark:text-slate-300 font-medium"
-                  />
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-2">
+                  <span className="font-bold text-slate-900 dark:text-slate-100 block">Audit Log Immutability Policy</span>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    All submissions, corrections, review approvals, and user status toggles are recorded into the immutable AuditLog table with user timestamp, email, and diff summary.
+                  </p>
+                  <div className="flex items-center text-emerald-700 dark:text-emerald-400 font-semibold gap-1.5 text-xs">
+                    <CheckCircle className="w-4 h-4" />
+                    <span>Permanent Audit Trail Active</span>
+                  </div>
                 </div>
               </div>
 
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-purple-50/40 dark:bg-purple-950/20 space-y-2">
-                <span className="font-bold text-purple-950 dark:text-purple-300 block">Bank Directorate Authorization</span>
-                <p className="text-purple-900 dark:text-purple-300 text-[11px]">
-                  Disciplinary sanctions filed in this application require formal concurrence from the responsible District Director before Head Office HR clearance is granted.
-                </p>
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/30 space-y-3">
+                  <span className="font-bold text-slate-900 dark:text-slate-100 block">Filing & Record Retention</span>
+                  <div className="space-y-2">
+                    <label className="block text-slate-700 dark:text-slate-300 font-semibold">Current Active Reporting Period:</label>
+                    <input
+                      type="text"
+                      disabled
+                      value="2026-Q4 (October - December 2026)"
+                      className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded p-2 text-slate-700 dark:text-slate-300 font-medium"
+                    />
+
+                    <label className="block text-slate-700 dark:text-slate-300 font-semibold pt-2">Regulatory Archive Retention Period:</label>
+                    <input
+                      type="text"
+                      disabled
+                      value="7 Years (Standard Bank Regulatory Compliance)"
+                      className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded p-2 text-slate-700 dark:text-slate-300 font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-purple-50/40 dark:bg-purple-950/20 space-y-2">
+                  <span className="font-bold text-purple-950 dark:text-purple-300 block">Bank Directorate Authorization</span>
+                  <p className="text-purple-900 dark:text-purple-300 text-[11px]">
+                    Disciplinary sanctions filed in this application require formal concurrence from the responsible District Director before Head Office HR clearance is granted.
+                  </p>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )
       )}
 
       {/* User Create / Edit Modal */}
-      {(isCreatingUser || editingUser) && (
+      {isAdmin && (isCreatingUser || editingUser) && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 transition-colors">
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 border-b border-slate-100 dark:border-slate-800 pb-2">
@@ -1132,7 +1233,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* User Password Reset & Activation Modal */}
-      {resetTargetUser && (
+      {isAdmin && resetTargetUser && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-blue-500/30 space-y-4 transition-colors">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">

@@ -74,7 +74,7 @@ export default function App() {
   const [systemConfig] = useState<SystemConfig>(INITIAL_CONFIG);
 
   // Firebase Context
-  const { firebaseUser, authLoading, isConnected, isSeeding, signInWithGoogle, sendPasswordReset, signOut, refreshConnection, dbError } = useFirebase();
+  const { firebaseUser, authLoading, isConnected, isSeeding, signInWithGoogle, sendPasswordReset, signOut, refreshConnection, dbError, clearDbError } = useFirebase();
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [isDbLoading, setIsDbLoading] = useState(false);
 
@@ -123,9 +123,9 @@ export default function App() {
     }
   }, [notification]);
 
-  // Connect Firestore Real-Time Snapshot Listeners
+  // Connect Firestore Real-Time Snapshot Listeners (only when auth is ready and user is authenticated)
   useEffect(() => {
-    if (!isConnected && !firebaseUser) return;
+    if (authLoading || !isConnected || !firebaseUser) return;
 
     setIsDbLoading(true);
 
@@ -252,7 +252,7 @@ export default function App() {
       unsubUsers();
       unsubAudit();
     };
-  }, [isConnected, firebaseUser]);
+  }, [isConnected, firebaseUser, authLoading]);
 
   // Real-time multi-tab synchronization: immediate role and status changes
   useEffect(() => {
@@ -791,6 +791,15 @@ export default function App() {
 
   // User management handlers
   const handleCreateUser = async (newUser: User) => {
+    const isCallerAdmin = currentUser?.Role === 'ADMIN' || sessionAdminUser?.Role === 'ADMIN';
+    if (!isCallerAdmin) {
+      setNotification({
+        type: 'error',
+        message: 'Permission Denied: Only System Administrators are authorized to provision new users.',
+      });
+      return;
+    }
+
     const userEmail = currentUser?.Email || 'admin@cbo.com';
     const userName = currentUser?.FullName || 'Administrator';
 
@@ -826,6 +835,14 @@ export default function App() {
   };
 
   const handleUpdateUser = async (updatedUser: User) => {
+    const isCallerAdmin = currentUser?.Role === 'ADMIN' || sessionAdminUser?.Role === 'ADMIN';
+    if (!isCallerAdmin) {
+      setNotification({
+        type: 'error',
+        message: 'Permission Denied: Only System Administrators are authorized to update user roles or profiles.',
+      });
+      return;
+    }
     const userEmail = currentUser?.Email || 'admin@cbo.com';
     const userName = currentUser?.FullName || 'Administrator';
     const updatedUsersList = users.map((u) => (u.UserID === updatedUser.UserID || u.Email.toLowerCase() === updatedUser.Email.toLowerCase() ? updatedUser : u));
@@ -1074,13 +1091,27 @@ export default function App() {
           </div>
         )}
 
-        {/* Database Error Banner if any */}
+        {/* Database / Authentication Notice Banner if any */}
         {dbError && (
-          <div className="p-3.5 rounded-xl mb-5 border bg-red-950/80 border-red-800 text-red-200 flex items-center justify-between text-xs shadow-sm">
-            <div className="flex items-center space-x-2.5">
-              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
-              <span><strong>Cloud Database Error:</strong> {dbError}</span>
+          <div className="p-3.5 rounded-xl mb-5 border bg-amber-950/80 border-amber-800 text-amber-200 flex items-start justify-between text-xs shadow-sm">
+            <div className="flex items-start space-x-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold block mb-0.5">
+                  {dbError.includes('unauthorized-domain') || dbError.includes('Authorized Domains') || dbError.includes('authorized for Google Sign-In')
+                    ? 'Firebase Authentication Domain Setup Required:'
+                    : 'Cloud Service Notice:'}
+                </span>
+                <span className="leading-relaxed text-slate-200">{dbError}</span>
+              </div>
             </div>
+            <button
+              onClick={clearDbError}
+              className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/10 transition shrink-0 ml-2"
+              title="Dismiss notice"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         )}
 
@@ -1374,8 +1405,10 @@ export default function App() {
 
             {/* Tab: User Management (Admin only) */}
             {activeTab === 'users' && (
-              hasPermission(activeUser.Role, 'users.manage') || isAuthorizedAdmin ? (
+              activeUser.Role === 'ADMIN' || isAuthorizedAdmin ? (
                 <AdminDashboard
+                  currentUser={activeUser}
+                  initialTab="users"
                   users={users}
                   districts={districts}
                   onUpdateUser={handleUpdateUser}
@@ -1388,16 +1421,18 @@ export default function App() {
                   <Shield className="w-12 h-12 text-red-500 mx-auto" />
                   <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">Restricted Area</h3>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    User account management and credential resets are restricted strictly to authorized System Administrators.
+                    User account provisioning, credential management, and role assignments are restricted strictly to authorized System Administrators.
                   </p>
                 </div>
               )
             )}
 
-            {/* Tab: District Registry (Admin only) */}
+            {/* Tab: District Registry */}
             {activeTab === 'districts' && (
               canAccessTab(activeUser.Role, 'districts') || isAuthorizedAdmin ? (
                 <AdminDashboard
+                  currentUser={activeUser}
+                  initialTab="districts"
                   users={users}
                   districts={districts}
                   onUpdateUser={handleUpdateUser}
