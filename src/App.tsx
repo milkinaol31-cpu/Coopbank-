@@ -66,8 +66,10 @@ import { AppDeploymentModal } from './components/AppDeploymentModal';
 import { AccessDeniedScreen } from './components/AccessDeniedScreen';
 import { LoginScreen } from './components/LoginScreen';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
+import { UserSecuritySettingsModal } from './components/UserSecuritySettingsModal';
 import { exportReportsToCSV } from './utils/exportUtils';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
+import { getUserBiometricPreference } from './utils/webauthn';
 import { AlertCircle, Lock, Shield, Database, CheckCircle, AlertTriangle, X, RefreshCw, LogIn } from 'lucide-react';
 
 export default function App() {
@@ -111,6 +113,7 @@ export default function App() {
   const [printDocumentReport, setPrintDocumentReport] = useState<DisciplinaryReport | null>(null);
   const [editingReport, setEditingReport] = useState<DisciplinaryReport | null>(null);
   const [isGuideOpen, setIsGuideOpen] = useState<boolean>(false);
+  const [isSecurityModalOpen, setIsSecurityModalOpen] = useState<boolean>(false);
 
   // Optional filter drilldown
   const [forcedDistrictFilter, setForcedDistrictFilter] = useState<string | undefined>(undefined);
@@ -929,21 +932,6 @@ export default function App() {
     clearOfflineQueue();
   };
 
-  // Gate: When user is not authenticated via email/password or Google, require login first!
-  if (!currentUser && !firebaseUser) {
-    return (
-      <LoginScreen
-        allUsers={users}
-        onLoginSuccess={handleLoginSuccess}
-        onGoogleSignIn={signInWithGoogle}
-        onSendPasswordReset={sendPasswordReset}
-        onUpdateUserActivation={handleUpdateUserActivation}
-        authLoading={authLoading}
-        systemName={systemConfig.bankName}
-      />
-    );
-  }
-
   // User Access Whitelist & Active Status Validation
   const authEmail = (firebaseUser?.email || currentUser?.Email || '').toLowerCase().trim();
   const matchedUserInAcl = authEmail
@@ -1003,6 +991,7 @@ export default function App() {
   // If the user's role is updated such that their current tab is not allowed,
   // gracefully redirect them to their role's authorized default tab.
   useEffect(() => {
+    if (!currentUser && !firebaseUser) return;
     if (!activeUser) return;
     const allowed = getAllowedTabsForRole(activeUser.Role);
     if (!allowed.includes(activeTab)) {
@@ -1013,7 +1002,7 @@ export default function App() {
         message: `Your account role is updated to "${def.name}". Navigation refreshed to your authorized workspace.`,
       });
     }
-  }, [activeUser.Role, activeTab]);
+  }, [activeUser.Role, activeTab, currentUser, firebaseUser]);
 
   // Mandatory password change check: prompt user who signed in with admin-generated login (e.g. Coopbank@2026 or MustChangePassword flag)
   const isPasswordChangeRequired = Boolean(
@@ -1027,6 +1016,22 @@ export default function App() {
   const currentDistrict = districts.find(d => d.DistrictID === activeUser.DistrictID);
   const pendingReviewsCount = reports.filter(r => r.ReportStatus === 'Submitted' || r.ReportStatus === 'Under Review').length;
   const userDistrictCorrectionsCount = reports.filter(r => r.DistrictID === activeUser.DistrictID && r.ReportStatus === 'Correction Requested').length;
+
+  // Gate: When user is not authenticated via email/password or Google, require login first!
+  // Placed strictly AFTER all React Hook declarations to guarantee zero Rules-of-Hooks violations
+  if (!currentUser && !firebaseUser) {
+    return (
+      <LoginScreen
+        allUsers={users}
+        onLoginSuccess={handleLoginSuccess}
+        onGoogleSignIn={signInWithGoogle}
+        onSendPasswordReset={sendPasswordReset}
+        onUpdateUserActivation={handleUpdateUserActivation}
+        authLoading={authLoading}
+        systemName={systemConfig.bankName}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-950 flex flex-col font-sans text-slate-800 dark:text-slate-100 transition-colors duration-200">
@@ -1042,6 +1047,7 @@ export default function App() {
         onOpenGuide={() => setIsGuideOpen(true)}
         canSwitchUser={isAuthorizedAdmin}
         onSignOut={handleSignOut}
+        onOpenSecuritySettings={() => setIsSecurityModalOpen(true)}
       />
 
       {/* Global Navigation Bar (Only rendered when user is registered and active) */}
@@ -1059,6 +1065,12 @@ export default function App() {
           correctionsCount={userDistrictCorrectionsCount}
           offlineQueueCount={offlineQueue.length}
           isOnline={isOnline}
+          onOpenSecuritySettings={() => setIsSecurityModalOpen(true)}
+          isBiometricActive={
+            activeUser.BiometricEnabled !== undefined
+              ? activeUser.BiometricEnabled
+              : getUserBiometricPreference(activeUser.Email, activeUser.Role === 'ADMIN' || activeUser.Role === 'HO_MANAGER')
+          }
         />
       )}
 
@@ -1522,6 +1534,16 @@ export default function App() {
           isOpen={isPasswordChangeRequired}
           user={currentUser}
           onPasswordChanged={handlePasswordChanged}
+        />
+      )}
+
+      {/* User Security & Biometric Preference Modal */}
+      {isSecurityModalOpen && activeUser && (
+        <UserSecuritySettingsModal
+          isOpen={isSecurityModalOpen}
+          onClose={() => setIsSecurityModalOpen(false)}
+          currentUser={activeUser}
+          onUpdateUser={handleUpdateUser}
         />
       )}
 

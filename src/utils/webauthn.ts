@@ -96,6 +96,37 @@ export function saveBiometricCredential(email: string, cred: WebAuthnCredentialR
   }
 }
 
+// Remove registered biometric credential
+export function removeBiometricCredential(email: string): void {
+  try {
+    localStorage.removeItem(`${STORAGE_KEY_PREFIX}${email.toLowerCase().trim()}`);
+  } catch (err) {
+    console.warn('Failed to remove biometric credential from localStorage:', err);
+  }
+}
+
+const PREF_KEY_PREFIX = 'cbo_user_pref_webauthn_';
+
+// Check if user has explicitly enabled or disabled biometric authentication
+export function getUserBiometricPreference(email: string, defaultForHighPrivilege: boolean = true): boolean {
+  try {
+    const raw = localStorage.getItem(`${PREF_KEY_PREFIX}${email.toLowerCase().trim()}`);
+    if (raw !== null) {
+      return raw === 'true';
+    }
+  } catch {}
+  return defaultForHighPrivilege;
+}
+
+// Persist user biometric preference
+export function setUserBiometricPreference(email: string, enabled: boolean): void {
+  try {
+    localStorage.setItem(`${PREF_KEY_PREFIX}${email.toLowerCase().trim()}`, String(enabled));
+  } catch (err) {
+    console.warn('Failed to set biometric preference:', err);
+  }
+}
+
 // Register a new platform biometric authenticator (Touch ID, Windows Hello, Face ID, etc.)
 export async function registerBiometricCredential(
   user: { email: string; fullName: string; id: string }

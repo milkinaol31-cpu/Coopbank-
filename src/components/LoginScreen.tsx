@@ -30,6 +30,7 @@ import {
   registerBiometricCredential,
   authenticateWithBiometrics,
   getStoredBiometricCredential,
+  getUserBiometricPreference,
   WebAuthnCredentialRecord,
 } from '../utils/webauthn';
 
@@ -234,9 +235,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         MustChangePassword: isDefaultOrAdminGenerated,
       };
 
-      // HIGH-PRIVILEGE SECURITY STEP: If the user is an Administrator or HO Manager,
-      // prompt for browser-based WebAuthn/Biometric authentication as an additional security layer
-      if (isHighPrivilegeAdmin && isWebAuthnSupported) {
+      // HIGH-PRIVILEGE SECURITY STEP / PERSONALIZED SECURITY PREFERENCE:
+      // If the user is an Administrator or HO Manager (or has explicitly toggled Biometrics ON for their account),
+      // prompt for browser-based WebAuthn/Biometric authentication as an additional security layer,
+      // UNLESS they have explicitly disabled biometrics in their user profile settings.
+      const userBiometricPref = matchedUser.BiometricEnabled !== undefined
+        ? matchedUser.BiometricEnabled
+        : getUserBiometricPreference(cleanEmail, isHighPrivilegeAdmin);
+
+      if (userBiometricPref && isWebAuthnSupported) {
         setPendingAdminUser({
           user: userToLogin,
           requiresPasswordChange: isDefaultOrAdminGenerated,
@@ -244,7 +251,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         setIsBiometricPromptOpen(true);
         setBiometricFeedback({
           type: 'idle',
-          message: 'Biometric verification required for high-privilege administrative authorization.',
+          message: isHighPrivilegeAdmin
+            ? 'Biometric verification required for high-privilege administrative authorization.'
+            : 'Personalized biometric authentication preference active for your account.',
         });
         setIsSubmitting(false);
         return;

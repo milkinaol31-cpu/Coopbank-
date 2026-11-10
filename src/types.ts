@@ -65,6 +65,7 @@ export interface User {
   MustChangePassword?: boolean;
   ActivationCode?: string;
   LastPasswordReset?: string;
+  BiometricEnabled?: boolean;
 }
 
 export interface ReportAttachment {

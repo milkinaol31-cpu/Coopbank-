@@ -12,7 +12,10 @@ import {
   LogIn,
   LogOut,
   HelpCircle,
-  Briefcase
+  Briefcase,
+  Fingerprint,
+  Bot,
+  Sparkles,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ThemeToggle } from './ThemeToggle';
@@ -28,8 +31,10 @@ interface HeaderProps {
   onOpenOfflineCenter: () => void;
   unsyncedCount: number;
   onOpenGuide: () => void;
+  onOpenAiAssistant?: () => void;
   canSwitchUser?: boolean;
   onSignOut?: () => void;
+  onOpenSecuritySettings?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -41,8 +46,10 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenOfflineCenter,
   unsyncedCount,
   onOpenGuide,
+  onOpenAiAssistant,
   canSwitchUser,
   onSignOut,
+  onOpenSecuritySettings,
 }) => {
   const currentDistrict = districts.find((d) => d.DistrictID === currentUser.DistrictID);
   const { isOnline } = useOnlineStatus();
@@ -96,6 +103,21 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           <span className="text-slate-700 hidden sm:inline">•</span>
+
+          {/* AI Assistant Quick Trigger */}
+          {onOpenAiAssistant && (
+            <>
+              <button
+                onClick={onOpenAiAssistant}
+                className="flex items-center space-x-1.5 px-2.5 py-0.5 rounded text-[11px] font-bold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-sm border border-blue-400/30 transition transform hover:scale-[1.02]"
+                title="Open CoopBank AI Disciplinary Advisor"
+              >
+                <Sparkles className="w-3 h-3 text-amber-300 animate-pulse" />
+                <span>AI Advisor</span>
+              </button>
+              <span className="text-slate-700 hidden sm:inline">•</span>
+            </>
+          )}
 
           {/* In-App PWA Install Button */}
           <PWAInstallButton onOpenGuide={onOpenGuide} />
@@ -200,6 +222,17 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Current Active User Profile */}
         <div className="flex items-center space-x-3 bg-slate-800/90 p-2 px-3 rounded-xl border border-slate-700 shadow-sm">
+          {onOpenSecuritySettings && (
+            <button
+              type="button"
+              onClick={onOpenSecuritySettings}
+              className="p-1.5 rounded-lg bg-purple-950/70 border border-purple-800/80 text-purple-300 hover:bg-purple-900 hover:text-white transition shadow-xs flex items-center justify-center shrink-0"
+              title="Personalized Biometric & WebAuthn Security Settings"
+            >
+              <Fingerprint className="w-4 h-4 text-purple-400" />
+            </button>
+          )}
+
           <div className="text-right">
             <div className="flex items-center justify-end space-x-2">
               <span className="text-sm font-semibold text-slate-100">{currentUser.FullName}</span>

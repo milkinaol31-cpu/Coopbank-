@@ -13,6 +13,8 @@ import {
   ShieldAlert,
   Database,
   Lock,
+  Fingerprint,
+  ShieldCheck,
 } from 'lucide-react';
 
 export type NavTab = AppTab;
@@ -26,6 +28,8 @@ interface NavigationProps {
   correctionsCount: number;
   offlineQueueCount: number;
   isOnline: boolean;
+  onOpenSecuritySettings?: () => void;
+  isBiometricActive?: boolean;
 }
 
 export const Navigation: React.FC<NavigationProps> = ({
@@ -36,6 +40,8 @@ export const Navigation: React.FC<NavigationProps> = ({
   correctionsCount,
   offlineQueueCount,
   isOnline,
+  onOpenSecuritySettings,
+  isBiometricActive,
 }) => {
   const roleDef = getRoleDefinition(userRole);
 
@@ -207,6 +213,28 @@ export const Navigation: React.FC<NavigationProps> = ({
               );
             })}
           </div>
+
+          {/* User Profile Security Settings Button */}
+          {onOpenSecuritySettings && (
+            <div className="shrink-0 pl-2">
+              <button
+                type="button"
+                onClick={onOpenSecuritySettings}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 transition shadow-xs"
+                title="Personalized Account Security & WebAuthn / Biometric Preferences"
+              >
+                <Fingerprint className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                <span className="hidden sm:inline">Profile Security</span>
+                <span className="sm:hidden">Security</span>
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    isBiometricActive ? 'bg-emerald-500' : 'bg-slate-400'
+                  }`}
+                  title={isBiometricActive ? 'Biometric Authentication ON' : 'Biometric Authentication OFF'}
+                />
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </nav>
