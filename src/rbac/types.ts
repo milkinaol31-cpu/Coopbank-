@@ -93,7 +93,7 @@ export interface LoginHistoryRecord {
   userId: string;
   email: string;
   timestamp: string;
-  authMethod: 'PASSWORD' | 'GOOGLE' | 'ACTIVATION_CODE';
+  authMethod: 'PASSWORD' | 'GOOGLE' | 'ACTIVATION_CODE' | 'WEBAUTHN_BIOMETRIC';
   status: 'SUCCESS' | 'FAILED';
   roleAtLogin: UserRole;
   districtId?: string | null;

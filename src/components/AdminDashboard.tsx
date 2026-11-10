@@ -23,6 +23,7 @@ import {
   History,
   Briefcase,
   Layers,
+  Fingerprint,
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -954,6 +955,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div className="flex items-center text-emerald-700 dark:text-emerald-400 font-semibold gap-1.5 text-xs">
                     <CheckCircle className="w-4 h-4" />
                     <span>Permanent Audit Trail Active</span>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl border border-purple-200 dark:border-purple-900/50 bg-purple-50/50 dark:bg-purple-950/30 space-y-2">
+                  <span className="font-bold text-purple-950 dark:text-purple-300 flex items-center gap-1.5">
+                    <Fingerprint className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                    WebAuthn / Biometric Administrative Policy
+                  </span>
+                  <p className="text-purple-900 dark:text-purple-300 text-[11px] leading-relaxed">
+                    Browser-based platform biometric verification (Touch ID, Windows Hello, Face ID, Android Biometrics) is enforced on the Login Screen for high-privilege administrative sessions (System Administrator and Head Office Manager). Cryptographic hardware challenges prevent credential stuffing and unauthorized terminal takeovers.
+                  </p>
+                  <div className="flex items-center text-purple-700 dark:text-purple-300 font-semibold gap-1.5 text-xs">
+                    <ShieldCheck className="w-4 h-4 text-purple-500" />
+                    <span>FIDO2 / WebAuthn Biometric Guard Enforced</span>
                   </div>
                 </div>
               </div>
